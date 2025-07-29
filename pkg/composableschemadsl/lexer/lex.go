@@ -86,8 +86,8 @@ type stateFn func(*Lexer) stateFn
 type Lexer struct {
 	sync.RWMutex
 	source              input.Source       // the name of the input; used only for error reports
-	input               string             // the string being scanned
-	state               stateFn            // the next lexing function to enter
+	input               string             // the string being scanned.
+	state               stateFn            // the next lexing function to enter. GUARDED_BY(RWMutex)
 	pos                 input.BytePosition // current position in the input
 	start               input.BytePosition // start position of this token
 	width               input.BytePosition // width of last rune read from input
@@ -154,7 +154,7 @@ func (l *Lexer) emit(t TokenType) {
 
 // errorf returns an error token and terminates the scan by passing
 // back a nil pointer that will be the next state, terminating l.nexttoken.
-func (l *Lexer) errorf(currentRune rune, format string, args ...interface{}) stateFn {
+func (l *Lexer) errorf(currentRune rune, format string, args ...any) stateFn {
 	l.tokens <- Lexeme{TokenTypeError, l.start, string(currentRune), fmt.Sprintf(format, args...)}
 	return nil
 }

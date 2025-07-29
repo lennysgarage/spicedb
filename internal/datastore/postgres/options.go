@@ -31,9 +31,11 @@ type postgresOptions struct {
 	gcEnabled                      bool
 	readStrictMode                 bool
 	expirationDisabled             bool
+	watchDisabled                  bool
 	columnOptimizationOption       common.ColumnOptimizationOption
 	includeQueryParametersInTraces bool
 	revisionHeartbeatEnabled       bool
+	relaxedIsolationLevel          bool
 
 	migrationPhase    string
 	allowedMigrations []string
@@ -73,12 +75,14 @@ const (
 	defaultCredentialsProviderName           = ""
 	defaultReadStrictMode                    = false
 	defaultFilterMaximumIDCount              = 100
-	defaultColumnOptimizationOption          = common.ColumnOptimizationOptionNone
+	defaultColumnOptimizationOption          = common.ColumnOptimizationOptionStaticValues
 	defaultIncludeQueryParametersInTraces    = false
 	defaultExpirationDisabled                = false
+	defaultWatchDisabled                     = false
 	// no follower delay by default, it should only be set if using read replicas
-	defaultFollowerReadDelay = 0
-	defaultRevisionHeartbeat = true
+	defaultFollowerReadDelay     = 0
+	defaultRevisionHeartbeat     = true
+	defaultRelaxedIsolationLevel = false
 )
 
 // Option provides the facility to configure how clients within the
@@ -104,8 +108,10 @@ func generateConfig(options []Option) (postgresOptions, error) {
 		columnOptimizationOption:       defaultColumnOptimizationOption,
 		includeQueryParametersInTraces: defaultIncludeQueryParametersInTraces,
 		expirationDisabled:             defaultExpirationDisabled,
+		watchDisabled:                  defaultWatchDisabled,
 		followerReadDelay:              defaultFollowerReadDelay,
 		revisionHeartbeatEnabled:       defaultRevisionHeartbeat,
+		relaxedIsolationLevel:          defaultRelaxedIsolationLevel,
 	}
 
 	for _, option := range options {
@@ -427,4 +433,16 @@ func WithExpirationDisabled(isDisabled bool) Option {
 // WithRevisionHeartbeat enables the revision heartbeat.
 func WithRevisionHeartbeat(isEnabled bool) Option {
 	return func(po *postgresOptions) { po.revisionHeartbeatEnabled = isEnabled }
+}
+
+// WithWatchDisabled disables the watch functionality.
+func WithWatchDisabled(isDisabled bool) Option {
+	return func(po *postgresOptions) { po.watchDisabled = isDisabled }
+}
+
+// WithRelaxedIsolationLevel relaxes the required Serializable isolation level to run SpiceDB on Postgres.
+// Please note this will defeat the new enemy problem and SpiceDB won't be able to provide strong consistency
+// guarantees.
+func WithRelaxedIsolationLevel(isEnabled bool) Option {
+	return func(po *postgresOptions) { po.relaxedIsolationLevel = isEnabled }
 }

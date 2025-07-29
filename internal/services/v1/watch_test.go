@@ -10,11 +10,12 @@ import (
 	"testing"
 	"time"
 
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
-	"github.com/authzed/grpcutil"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+	"github.com/authzed/grpcutil"
 
 	"github.com/authzed/spicedb/internal/datastore/memdb"
 	"github.com/authzed/spicedb/internal/testfixtures"
@@ -355,7 +356,7 @@ definition document {
 				cursor = tc.startCursor
 			}
 
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
 			stream, err := client.Watch(ctx, &v1.WatchRequest{
@@ -395,13 +396,13 @@ definition document {
 				}()
 
 				if len(tc.mutations) > 0 {
-					_, err := v1.NewPermissionsServiceClient(conn).WriteRelationships(context.Background(), &v1.WriteRelationshipsRequest{
+					_, err := v1.NewPermissionsServiceClient(conn).WriteRelationships(t.Context(), &v1.WriteRelationshipsRequest{
 						Updates: tc.mutations,
 					})
 					require.NoError(err)
 				}
 				if len(tc.mutatedSchema) > 0 {
-					_, err := v1.NewSchemaServiceClient(conn).WriteSchema(context.Background(), &v1.WriteSchemaRequest{
+					_, err := v1.NewSchemaServiceClient(conn).WriteSchema(t.Context(), &v1.WriteSchemaRequest{
 						Schema: tc.mutatedSchema,
 					})
 					require.NoError(err)

@@ -1,8 +1,3 @@
-// Package telemetry implements a client for reporting telemetry data used to
-// prioritize development of SpiceDB.
-//
-// For more information, see:
-// https://github.com/authzed/spicedb/blob/main/TELEMETRY.md
 package telemetry
 
 import (
@@ -14,15 +9,16 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	prompb "buf.build/gen/go/prometheus/prometheus/protocolbuffers/go"
 	"github.com/cenkalti/backoff/v4"
-	"github.com/gogo/protobuf/proto"
 	"github.com/golang/snappy"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
+	"google.golang.org/protobuf/proto"
 
 	log "github.com/authzed/spicedb/internal/logging"
 	"github.com/authzed/spicedb/pkg/x509util"
@@ -50,9 +46,7 @@ const (
 func writeTimeSeries(ctx context.Context, client *http.Client, endpoint string, ts []*prompb.TimeSeries) error {
 	// Reference upstream client:
 	// https://github.com/prometheus/prometheus/blob/6555cc68caf8d8f323056e497ae7bb1e32a81667/storage/remote/client.go#L191
-	pbBytes, err := proto.Marshal(&prompb.WriteRequest{
-		Timeseries: ts,
-	})
+	pbBytes, err := proto.Marshal(&prompb.WriteRequest{Timeseries: ts})
 	if err != nil {
 		return fmt.Errorf("failed to marshal Prometheus remote write protobuf: %w", err)
 	}
@@ -139,7 +133,7 @@ func RemoteReporter(
 	if _, err := url.Parse(endpoint); err != nil {
 		return nil, fmt.Errorf("invalid telemetry endpoint: %w", err)
 	}
-	if interval < MinimumAllowedInterval {
+	if !strings.Contains(endpoint, "127.0.0.1") && interval < MinimumAllowedInterval {
 		return nil, fmt.Errorf("invalid telemetry reporting interval: %s < %s", interval, MinimumAllowedInterval)
 	}
 	if endpoint == DefaultEndpoint && interval != DefaultInterval {
@@ -164,10 +158,13 @@ func RemoteReporter(
 	}
 
 	return func(ctx context.Context) error {
-		// nolint:gosec
-		// G404 use of non cryptographically secure random number generator is not a security concern here,
-		// as this is only used to smear the startup delay out over 10% of the reporting interval
-		startupDelay := time.Duration(rand.Int63n(int64(interval.Seconds()/10))) * time.Second
+		var startupDelay time.Duration
+		if interval >= MinimumAllowedInterval {
+			// nolint:gosec
+			// G404 use of non cryptographically secure random number generator is not a security concern here,
+			// as this is only used to smear the startup delay out over 10% of the reporting interval
+			startupDelay = time.Duration(rand.Int63n(int64(interval.Seconds()/10))) * time.Second
+		}
 
 		log.Ctx(ctx).Info().
 			Stringer("interval", interval).

@@ -10,8 +10,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	mysqlCommon "github.com/authzed/spicedb/internal/datastore/mysql/common"
-
 	sq "github.com/Masterminds/squirrel"
 	"github.com/dlmiddlecote/sqlstats"
 	"github.com/go-sql-driver/mysql"
@@ -22,6 +20,7 @@ import (
 
 	datastoreinternal "github.com/authzed/spicedb/internal/datastore"
 	"github.com/authzed/spicedb/internal/datastore/common"
+	mysqlCommon "github.com/authzed/spicedb/internal/datastore/mysql/common"
 	"github.com/authzed/spicedb/internal/datastore/mysql/migrations"
 	"github.com/authzed/spicedb/internal/datastore/revisions"
 	log "github.com/authzed/spicedb/internal/logging"
@@ -93,7 +92,7 @@ func init() {
 }
 
 type sqlFilter interface {
-	ToSql() (string, []interface{}, error)
+	ToSql() (string, []any, error)
 }
 
 // NewMySQLDatastore creates a new mysql.Datastore value configured with the MySQL instance
@@ -282,6 +281,7 @@ func newMySQLDatastore(ctx context.Context, uri string, replicaIndex int, option
 		gcTimeout:               config.gcMaxOperationTime,
 		gcCtx:                   gcCtx,
 		cancelGc:                cancelGc,
+		watchEnabled:            !config.watchDisabled,
 		watchBufferLength:       config.watchBufferLength,
 		watchBufferWriteTimeout: config.watchBufferWriteTimeout,
 		optimizedRevisionQuery:  revisionQuery,
@@ -446,7 +446,7 @@ func isErrorRetryable(err error) bool {
 }
 
 type querier interface {
-	QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error)
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
 type asQueryableTx struct {
@@ -502,6 +502,7 @@ type Datastore struct {
 	gcTimeout               time.Duration
 	watchBufferLength       uint16
 	watchBufferWriteTimeout time.Duration
+	watchEnabled            bool
 	maxRetries              uint8
 	filterMaximumIDCount    uint16
 	schema                  common.SchemaInformation
@@ -574,9 +575,14 @@ func (mds *Datastore) Features(_ context.Context) (*datastore.Features, error) {
 }
 
 func (mds *Datastore) OfflineFeatures() (*datastore.Features, error) {
+	watchSupported := datastore.FeatureUnsupported
+	if mds.watchEnabled {
+		watchSupported = datastore.FeatureSupported
+	}
+
 	return &datastore.Features{
 		Watch: datastore.Feature{
-			Status: datastore.FeatureSupported,
+			Status: watchSupported,
 		},
 		IntegrityData: datastore.Feature{
 			Status: datastore.FeatureUnsupported,

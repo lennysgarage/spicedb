@@ -1,23 +1,21 @@
-// Package testutil implements various utilities to reduce boilerplate in unit
-// tests a la testify.
 package testutil
 
 import (
 	"testing"
 	"time"
 
-	v0 "github.com/authzed/authzed-go/proto/authzed/api/v0"
-
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/require"
+
+	v0 "github.com/authzed/authzed-go/proto/authzed/api/v0"
 
 	core "github.com/authzed/spicedb/pkg/proto/core/v1"
 )
 
 // RequireEqualEmptyNil is a version of require.Equal, but considers nil
 // slices/maps to be equal to empty slices/maps.
-func RequireEqualEmptyNil(t *testing.T, expected, actual interface{}, msgAndArgs ...interface{}) {
+func RequireEqualEmptyNil(t *testing.T, expected, actual any, msgAndArgs ...any) {
 	opts := []cmp.Option{
 		cmpopts.IgnoreUnexported(
 			v0.RelationTuple{},
@@ -25,9 +23,6 @@ func RequireEqualEmptyNil(t *testing.T, expected, actual interface{}, msgAndArgs
 			v0.RelationReference{},
 			v0.User_Userset{},
 			v0.User{},
-			v0.EditCheckResult{},
-			v0.EditCheckResultValidationError{},
-			v0.DeveloperError{},
 			core.RelationTuple{},
 			core.ObjectAndRelation{},
 			core.RelationReference{},

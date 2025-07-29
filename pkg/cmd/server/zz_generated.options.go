@@ -74,6 +74,7 @@ func (c *Config) ToOption() ConfigOption {
 		to.DispatchChunkSize = c.DispatchChunkSize
 		to.DispatchSecondaryUpstreamAddrs = c.DispatchSecondaryUpstreamAddrs
 		to.DispatchSecondaryUpstreamExprs = c.DispatchSecondaryUpstreamExprs
+		to.DispatchSecondaryMaximumPrimaryHedgingDelays = c.DispatchSecondaryMaximumPrimaryHedgingDelays
 		to.DispatchPrimaryDelayForTesting = c.DispatchPrimaryDelayForTesting
 		to.DispatchCacheConfig = c.DispatchCacheConfig
 		to.ClusterDispatchCacheConfig = c.ClusterDispatchCacheConfig
@@ -91,6 +92,7 @@ func (c *Config) ToOption() ConfigOption {
 		to.EnableExperimentalLookupResources = c.EnableExperimentalLookupResources
 		to.EnableExperimentalRelationshipExpiration = c.EnableExperimentalRelationshipExpiration
 		to.EnableRevisionHeartbeat = c.EnableRevisionHeartbeat
+		to.EnablePerformanceInsightMetrics = c.EnablePerformanceInsightMetrics
 		to.MetricsAPI = c.MetricsAPI
 		to.UnaryMiddlewareModification = c.UnaryMiddlewareModification
 		to.StreamingMiddlewareModification = c.StreamingMiddlewareModification
@@ -145,6 +147,7 @@ func (c Config) DebugMap() map[string]any {
 	debugMap["DispatchChunkSize"] = helpers.DebugValue(c.DispatchChunkSize, false)
 	debugMap["DispatchSecondaryUpstreamAddrs"] = helpers.DebugValue(c.DispatchSecondaryUpstreamAddrs, false)
 	debugMap["DispatchSecondaryUpstreamExprs"] = helpers.DebugValue(c.DispatchSecondaryUpstreamExprs, false)
+	debugMap["DispatchSecondaryMaximumPrimaryHedgingDelays"] = helpers.DebugValue(c.DispatchSecondaryMaximumPrimaryHedgingDelays, false)
 	debugMap["DispatchCacheConfig"] = helpers.DebugValue(c.DispatchCacheConfig, false)
 	debugMap["ClusterDispatchCacheConfig"] = helpers.DebugValue(c.ClusterDispatchCacheConfig, false)
 	debugMap["DisableV1SchemaAPI"] = helpers.DebugValue(c.DisableV1SchemaAPI, false)
@@ -161,6 +164,7 @@ func (c Config) DebugMap() map[string]any {
 	debugMap["EnableExperimentalLookupResources"] = helpers.DebugValue(c.EnableExperimentalLookupResources, false)
 	debugMap["EnableExperimentalRelationshipExpiration"] = helpers.DebugValue(c.EnableExperimentalRelationshipExpiration, false)
 	debugMap["EnableRevisionHeartbeat"] = helpers.DebugValue(c.EnableRevisionHeartbeat, false)
+	debugMap["EnablePerformanceInsightMetrics"] = helpers.DebugValue(c.EnablePerformanceInsightMetrics, false)
 	debugMap["MetricsAPI"] = helpers.DebugValue(c.MetricsAPI, false)
 	debugMap["SilentlyDisableTelemetry"] = helpers.DebugValue(c.SilentlyDisableTelemetry, false)
 	debugMap["TelemetryCAOverridePath"] = helpers.DebugValue(c.TelemetryCAOverridePath, false)
@@ -468,6 +472,20 @@ func SetDispatchSecondaryUpstreamExprs(dispatchSecondaryUpstreamExprs map[string
 	}
 }
 
+// WithDispatchSecondaryMaximumPrimaryHedgingDelays returns an option that can append DispatchSecondaryMaximumPrimaryHedgingDelayss to Config.DispatchSecondaryMaximumPrimaryHedgingDelays
+func WithDispatchSecondaryMaximumPrimaryHedgingDelays(key string, value string) ConfigOption {
+	return func(c *Config) {
+		c.DispatchSecondaryMaximumPrimaryHedgingDelays[key] = value
+	}
+}
+
+// SetDispatchSecondaryMaximumPrimaryHedgingDelays returns an option that can set DispatchSecondaryMaximumPrimaryHedgingDelays on a Config
+func SetDispatchSecondaryMaximumPrimaryHedgingDelays(dispatchSecondaryMaximumPrimaryHedgingDelays map[string]string) ConfigOption {
+	return func(c *Config) {
+		c.DispatchSecondaryMaximumPrimaryHedgingDelays = dispatchSecondaryMaximumPrimaryHedgingDelays
+	}
+}
+
 // WithDispatchPrimaryDelayForTesting returns an option that can set DispatchPrimaryDelayForTesting on a Config
 func WithDispatchPrimaryDelayForTesting(dispatchPrimaryDelayForTesting time.Duration) ConfigOption {
 	return func(c *Config) {
@@ -584,6 +602,13 @@ func WithEnableExperimentalRelationshipExpiration(enableExperimentalRelationship
 func WithEnableRevisionHeartbeat(enableRevisionHeartbeat bool) ConfigOption {
 	return func(c *Config) {
 		c.EnableRevisionHeartbeat = enableRevisionHeartbeat
+	}
+}
+
+// WithEnablePerformanceInsightMetrics returns an option that can set EnablePerformanceInsightMetrics on a Config
+func WithEnablePerformanceInsightMetrics(enablePerformanceInsightMetrics bool) ConfigOption {
+	return func(c *Config) {
+		c.EnablePerformanceInsightMetrics = enablePerformanceInsightMetrics
 	}
 }
 

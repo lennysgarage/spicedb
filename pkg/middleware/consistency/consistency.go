@@ -3,17 +3,16 @@ package consistency
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	log "github.com/authzed/spicedb/internal/logging"
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+
 	datastoremw "github.com/authzed/spicedb/internal/middleware/datastore"
 	"github.com/authzed/spicedb/internal/services/shared"
 	"github.com/authzed/spicedb/pkg/cursor"
@@ -36,7 +35,7 @@ type ctxKeyType struct{}
 
 var revisionKey ctxKeyType = struct{}{}
 
-var errInvalidZedToken = errors.New("invalid revision requested")
+var errInvalidZedToken = status.Error(codes.InvalidArgument, "invalid revision requested")
 
 type revisionHandle struct {
 	revision datastore.Revision
@@ -59,12 +58,12 @@ func RevisionFromContext(ctx context.Context) (datastore.Revision, *v1.ZedToken,
 		}
 	}
 
-	return nil, nil, fmt.Errorf("consistency middleware did not inject revision")
+	return nil, nil, status.Error(codes.Internal, "consistency middleware did not inject revision")
 }
 
 // AddRevisionToContext adds a revision to the given context, based on the consistency block found
 // in the given request (if applicable).
-func AddRevisionToContext(ctx context.Context, req interface{}, ds datastore.Datastore, serviceLabel string) error {
+func AddRevisionToContext(ctx context.Context, req any, ds datastore.Datastore, serviceLabel string) error {
 	switch req := req.(type) {
 	case hasConsistency:
 		return addRevisionToContextFromConsistency(ctx, req, ds, serviceLabel)
@@ -95,12 +94,12 @@ func addRevisionToContextFromConsistency(ctx context.Context, req hasConsistency
 
 		requestedRev, err := cursor.DecodeToDispatchRevision(withOptionalCursor.GetOptionalCursor(), ds)
 		if err != nil {
-			return rewriteDatastoreError(ctx, err)
+			return rewriteDatastoreError(err)
 		}
 
 		err = ds.CheckRevision(ctx, requestedRev)
 		if err != nil {
-			return rewriteDatastoreError(ctx, err)
+			return rewriteDatastoreError(err)
 		}
 
 		revision = requestedRev
@@ -118,7 +117,7 @@ func addRevisionToContextFromConsistency(ctx context.Context, req hasConsistency
 
 		databaseRev, err := ds.OptimizedRevision(ctx)
 		if err != nil {
-			return rewriteDatastoreError(ctx, err)
+			return rewriteDatastoreError(err)
 		}
 		revision = databaseRev
 
@@ -130,7 +129,7 @@ func addRevisionToContextFromConsistency(ctx context.Context, req hasConsistency
 
 		databaseRev, err := ds.HeadRevision(ctx)
 		if err != nil {
-			return rewriteDatastoreError(ctx, err)
+			return rewriteDatastoreError(err)
 		}
 		revision = databaseRev
 
@@ -139,7 +138,7 @@ func addRevisionToContextFromConsistency(ctx context.Context, req hasConsistency
 		// ever is later.
 		picked, pickedRequest, err := pickBestRevision(ctx, consistency.GetAtLeastAsFresh(), ds)
 		if err != nil {
-			return rewriteDatastoreError(ctx, err)
+			return rewriteDatastoreError(err)
 		}
 
 		source := "server"
@@ -166,13 +165,13 @@ func addRevisionToContextFromConsistency(ctx context.Context, req hasConsistency
 
 		err = ds.CheckRevision(ctx, requestedRev)
 		if err != nil {
-			return rewriteDatastoreError(ctx, err)
+			return rewriteDatastoreError(err)
 		}
 
 		revision = requestedRev
 
 	default:
-		return fmt.Errorf("missing handling of consistency case in %v", consistency)
+		return status.Errorf(codes.Internal, "missing handling of consistency case in %v", consistency)
 	}
 
 	handle.(*revisionHandle).revision = revision
@@ -188,7 +187,7 @@ var bypassServiceWhitelist = map[string]struct{}{
 // UnaryServerInterceptor returns a new unary server interceptor that performs per-request exchange of
 // the specified consistency configuration for the revision at which to perform the request.
 func UnaryServerInterceptor(serviceLabel string) grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		for bypass := range bypassServiceWhitelist {
 			if strings.HasPrefix(info.FullMethod, bypass) {
 				return handler(ctx, req)
@@ -207,7 +206,7 @@ func UnaryServerInterceptor(serviceLabel string) grpc.UnaryServerInterceptor {
 // StreamServerInterceptor returns a new stream server interceptor that performs per-request exchange of
 // the specified consistency configuration for the revision at which to perform the request.
 func StreamServerInterceptor(serviceLabel string) grpc.StreamServerInterceptor {
-	return func(srv interface{}, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	return func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		for bypass := range bypassServiceWhitelist {
 			if strings.HasPrefix(info.FullMethod, bypass) {
 				return handler(srv, stream)
@@ -222,12 +221,12 @@ type recvWrapper struct {
 	grpc.ServerStream
 	ctx          context.Context
 	serviceLabel string
-	handler      func(ctx context.Context, req interface{}, ds datastore.Datastore, serviceLabel string) error
+	handler      func(ctx context.Context, req any, ds datastore.Datastore, serviceLabel string) error
 }
 
 func (s *recvWrapper) Context() context.Context { return s.ctx }
 
-func (s *recvWrapper) RecvMsg(m interface{}) error {
+func (s *recvWrapper) RecvMsg(m any) error {
 	if err := s.ServerStream.RecvMsg(m); err != nil {
 		return err
 	}
@@ -260,7 +259,7 @@ func pickBestRevision(ctx context.Context, requested *v1.ZedToken, ds datastore.
 	return databaseRev, false, nil
 }
 
-func rewriteDatastoreError(ctx context.Context, err error) error {
+func rewriteDatastoreError(err error) error {
 	// Check if the error can be directly used.
 	if _, ok := status.FromError(err); ok {
 		return err
@@ -274,7 +273,6 @@ func rewriteDatastoreError(ctx context.Context, err error) error {
 		return shared.ErrServiceReadOnly
 
 	default:
-		log.Ctx(ctx).Err(err).Msg("unexpected consistency middleware error")
-		return err
+		return status.Errorf(codes.Internal, "unexpected consistency middleware error: %s", err.Error())
 	}
 }

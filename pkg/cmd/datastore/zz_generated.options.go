@@ -2,6 +2,7 @@
 package datastore
 
 import (
+	types "github.com/authzed/spicedb/pkg/caveats/types"
 	defaults "github.com/creasty/defaults"
 	helpers "github.com/ecordell/optgen/helpers"
 	"time"
@@ -53,6 +54,7 @@ func (c *Config) ToOption() ConfigOption {
 		to.BootstrapFileContents = c.BootstrapFileContents
 		to.BootstrapOverwrite = c.BootstrapOverwrite
 		to.BootstrapTimeout = c.BootstrapTimeout
+		to.CaveatTypeSet = c.CaveatTypeSet
 		to.RequestHedgingEnabled = c.RequestHedgingEnabled
 		to.RequestHedgingInitialSlowValue = c.RequestHedgingInitialSlowValue
 		to.RequestHedgingMaxRequests = c.RequestHedgingMaxRequests
@@ -65,6 +67,7 @@ func (c *Config) ToOption() ConfigOption {
 		to.ConnectRate = c.ConnectRate
 		to.GCInterval = c.GCInterval
 		to.GCMaxOperationTime = c.GCMaxOperationTime
+		to.RelaxedIsolationLevel = c.RelaxedIsolationLevel
 		to.SpannerCredentialsFile = c.SpannerCredentialsFile
 		to.SpannerCredentialsJSON = c.SpannerCredentialsJSON
 		to.SpannerEmulatorHost = c.SpannerEmulatorHost
@@ -78,6 +81,7 @@ func (c *Config) ToOption() ConfigOption {
 		to.WatchBufferLength = c.WatchBufferLength
 		to.WatchBufferWriteTimeout = c.WatchBufferWriteTimeout
 		to.WatchConnectTimeout = c.WatchConnectTimeout
+		to.DisableWatchSupport = c.DisableWatchSupport
 		to.MigrationPhase = c.MigrationPhase
 		to.AllowedMigrations = c.AllowedMigrations
 		to.ExperimentalColumnOptimization = c.ExperimentalColumnOptimization
@@ -121,6 +125,7 @@ func (c Config) DebugMap() map[string]any {
 	debugMap["ConnectRate"] = helpers.DebugValue(c.ConnectRate, false)
 	debugMap["GCInterval"] = helpers.DebugValue(c.GCInterval, false)
 	debugMap["GCMaxOperationTime"] = helpers.DebugValue(c.GCMaxOperationTime, false)
+	debugMap["RelaxedIsolationLevel"] = helpers.DebugValue(c.RelaxedIsolationLevel, false)
 	debugMap["SpannerCredentialsFile"] = helpers.DebugValue(c.SpannerCredentialsFile, false)
 	debugMap["SpannerCredentialsJSON"] = helpers.SensitiveDebugValue(c.SpannerCredentialsJSON)
 	debugMap["SpannerEmulatorHost"] = helpers.DebugValue(c.SpannerEmulatorHost, false)
@@ -333,6 +338,13 @@ func WithBootstrapTimeout(bootstrapTimeout time.Duration) ConfigOption {
 	}
 }
 
+// WithCaveatTypeSet returns an option that can set CaveatTypeSet on a Config
+func WithCaveatTypeSet(caveatTypeSet *types.TypeSet) ConfigOption {
+	return func(c *Config) {
+		c.CaveatTypeSet = caveatTypeSet
+	}
+}
+
 // WithRequestHedgingEnabled returns an option that can set RequestHedgingEnabled on a Config
 func WithRequestHedgingEnabled(requestHedgingEnabled bool) ConfigOption {
 	return func(c *Config) {
@@ -414,6 +426,13 @@ func WithGCInterval(gCInterval time.Duration) ConfigOption {
 func WithGCMaxOperationTime(gCMaxOperationTime time.Duration) ConfigOption {
 	return func(c *Config) {
 		c.GCMaxOperationTime = gCMaxOperationTime
+	}
+}
+
+// WithRelaxedIsolationLevel returns an option that can set RelaxedIsolationLevel on a Config
+func WithRelaxedIsolationLevel(relaxedIsolationLevel bool) ConfigOption {
+	return func(c *Config) {
+		c.RelaxedIsolationLevel = relaxedIsolationLevel
 	}
 }
 
@@ -519,6 +538,13 @@ func WithWatchBufferWriteTimeout(watchBufferWriteTimeout time.Duration) ConfigOp
 func WithWatchConnectTimeout(watchConnectTimeout time.Duration) ConfigOption {
 	return func(c *Config) {
 		c.WatchConnectTimeout = watchConnectTimeout
+	}
+}
+
+// WithDisableWatchSupport returns an option that can set DisableWatchSupport on a Config
+func WithDisableWatchSupport(disableWatchSupport bool) ConfigOption {
+	return func(c *Config) {
+		c.DisableWatchSupport = disableWatchSupport
 	}
 }
 

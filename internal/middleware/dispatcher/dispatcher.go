@@ -33,17 +33,6 @@ func FromContext(ctx context.Context) dispatch.Dispatcher {
 	return nil
 }
 
-// MustFromContext reads the selected dispatcher out of a context.Context, computes a zedtoken
-// from it, and panics if it has not been set on the context.
-func MustFromContext(ctx context.Context) dispatch.Dispatcher {
-	dispatcher := FromContext(ctx)
-	if dispatcher == nil {
-		panic("dispatcher middleware did not inject dispatcher")
-	}
-
-	return dispatcher
-}
-
 // SetInContext adds a dispatcher to the given context
 func SetInContext(ctx context.Context, dispatcher dispatch.Dispatcher) error {
 	handle := ctx.Value(dispatcherKey)
@@ -57,7 +46,7 @@ func SetInContext(ctx context.Context, dispatcher dispatch.Dispatcher) error {
 // UnaryServerInterceptor returns a new unary server interceptor that adds the
 // dispatcher to the context
 func UnaryServerInterceptor(dispatcher dispatch.Dispatcher) grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		newCtx := ContextWithHandle(ctx)
 		if err := SetInContext(newCtx, dispatcher); err != nil {
 			return nil, err
@@ -70,7 +59,7 @@ func UnaryServerInterceptor(dispatcher dispatch.Dispatcher) grpc.UnaryServerInte
 // StreamServerInterceptor returns a new stream server interceptor that adds the
 // dispatcher to the context
 func StreamServerInterceptor(dispatcher dispatch.Dispatcher) grpc.StreamServerInterceptor {
-	return func(srv interface{}, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	return func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		wrapped := middleware.WrapServerStream(stream)
 		wrapped.WrappedContext = ContextWithHandle(wrapped.WrappedContext)
 		if err := SetInContext(wrapped.WrappedContext, dispatcher); err != nil {

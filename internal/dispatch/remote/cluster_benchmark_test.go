@@ -46,7 +46,7 @@ func BenchmarkSecondaryDispatching(b *testing.B) {
 	require.NoError(b, err)
 
 	secondaryDispatch := map[string]SecondaryDispatch{
-		"secondary": {Name: "secondary", Client: fakeClusterClient{true}},
+		"secondary": {Name: "secondary", Client: fakeClusterClient{true}, MaximumPrimaryHedgingDelay: 5 * time.Millisecond},
 	}
 	secondaryDispatchExprs := map[string]*DispatchExpr{
 		"check": parsed,
@@ -58,7 +58,7 @@ func BenchmarkSecondaryDispatching(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_, err = dispatcher.DispatchCheck(context.Background(), &v1.DispatchCheckRequest{
+		_, err = dispatcher.DispatchCheck(b.Context(), &v1.DispatchCheckRequest{
 			ResourceRelation: &corev1.RelationReference{Namespace: "sometype", Relation: "somerel"},
 			ResourceIds:      []string{"foo"},
 			Metadata:         &v1.ResolverMeta{DepthRemaining: 50},

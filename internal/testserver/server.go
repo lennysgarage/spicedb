@@ -4,14 +4,14 @@ import (
 	"context"
 	"time"
 
-	"github.com/authzed/spicedb/internal/middleware/servicespecific"
-
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 
 	"github.com/authzed/spicedb/internal/datastore/memdb"
 	"github.com/authzed/spicedb/internal/dispatch/graph"
 	datastoremw "github.com/authzed/spicedb/internal/middleware/datastore"
+	"github.com/authzed/spicedb/internal/middleware/servicespecific"
+	caveattypes "github.com/authzed/spicedb/pkg/caveats/types"
 	"github.com/authzed/spicedb/pkg/cmd/server"
 	"github.com/authzed/spicedb/pkg/cmd/util"
 	"github.com/authzed/spicedb/pkg/datastore"
@@ -25,6 +25,7 @@ type ServerConfig struct {
 	MaxPreconditionsCount      uint16
 	MaxRelationshipContextSize int
 	StreamingAPITimeout        time.Duration
+	CaveatTypeSet              *caveattypes.TypeSet
 }
 
 var DefaultTestServerConfig = ServerConfig{
@@ -72,10 +73,11 @@ func NewTestServerWithConfigAndDatastore(require *require.Assertions,
 ) (*grpc.ClientConn, func(), datastore.Datastore, datastore.Revision) {
 	ds, revision := dsInitFunc(emptyDS, require)
 	ctx, cancel := context.WithCancel(context.Background())
+	cts := caveattypes.TypeSetOrDefault(config.CaveatTypeSet)
 	srv, err := server.NewConfigWithOptionsAndDefaults(
 		server.WithEnableExperimentalRelationshipExpiration(true),
 		server.WithDatastore(ds),
-		server.WithDispatcher(graph.NewLocalOnlyDispatcher(10, 100)),
+		server.WithDispatcher(graph.NewLocalOnlyDispatcher(cts, 10, 100)),
 		server.WithDispatchMaxDepth(50),
 		server.WithMaximumPreconditionCount(config.MaxPreconditionsCount),
 		server.WithMaximumUpdatesPerWrite(config.MaxUpdatesPerWrite),

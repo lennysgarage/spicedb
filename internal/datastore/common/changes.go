@@ -2,12 +2,12 @@ package common
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"sort"
 
-	"golang.org/x/exp/maps"
-	"google.golang.org/protobuf/types/known/structpb"
-
 	"github.com/ccoveille/go-safecast"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	log "github.com/authzed/spicedb/internal/logging"
 	"github.com/authzed/spicedb/pkg/datastore"
@@ -146,7 +146,9 @@ func (ch *Changes[R, K]) SetRevisionMetadata(ctx context.Context, rev R, metadat
 	}
 
 	if len(record.metadata) > 0 {
-		return spiceerrors.MustBugf("metadata already set for revision")
+		if !maps.Equal(record.metadata, metadata) {
+			return spiceerrors.MustBugf("different metadata already set for revision %v: %v vs %v", rev, record.metadata, metadata)
+		}
 	}
 
 	maps.Copy(record.metadata, metadata)
@@ -187,8 +189,13 @@ func (ch *Changes[R, K]) AddDeletedNamespace(
 		return err
 	}
 
-	delete(record.definitionsChanged, nsPrefix+namespaceName)
+	// if a delete happens in the same transaction as a change, we assume it was a change in the first place
+	// because that's how namespace changes are implemented in the MVCC
+	if _, ok := record.definitionsChanged[nsPrefix+namespaceName]; ok {
+		return nil
+	}
 
+	delete(record.definitionsChanged, nsPrefix+namespaceName)
 	record.namespacesDeleted[namespaceName] = struct{}{}
 	return nil
 }
@@ -208,8 +215,13 @@ func (ch *Changes[R, K]) AddDeletedCaveat(
 		return err
 	}
 
-	delete(record.definitionsChanged, caveatPrefix+caveatName)
+	// if a delete happens in the same transaction as a change, we assume it was a change in the first place
+	// because that's how namespace changes are implemented in the MVCC
+	if _, ok := record.definitionsChanged[caveatPrefix+caveatName]; ok {
+		return nil
+	}
 
+	delete(record.definitionsChanged, caveatPrefix+caveatName)
 	record.caveatsDeleted[caveatName] = struct{}{}
 	return nil
 }
@@ -316,9 +328,9 @@ func (ch *Changes[R, K]) revisionChanges(lessThanFunc func(lhs, rhs K) bool, bou
 		for _, rel := range revisionChangeRecord.relDeletes {
 			changes[i].RelationshipChanges = append(changes[i].RelationshipChanges, tuple.Delete(rel))
 		}
-		changes[i].ChangedDefinitions = maps.Values(revisionChangeRecord.definitionsChanged)
-		changes[i].DeletedNamespaces = maps.Keys(revisionChangeRecord.namespacesDeleted)
-		changes[i].DeletedCaveats = maps.Keys(revisionChangeRecord.caveatsDeleted)
+		changes[i].ChangedDefinitions = slices.Collect(maps.Values(revisionChangeRecord.definitionsChanged))
+		changes[i].DeletedNamespaces = slices.Collect(maps.Keys(revisionChangeRecord.namespacesDeleted))
+		changes[i].DeletedCaveats = slices.Collect(maps.Keys(revisionChangeRecord.caveatsDeleted))
 
 		if len(revisionChangeRecord.metadata) > 0 {
 			metadata, err := structpb.NewStruct(revisionChangeRecord.metadata)

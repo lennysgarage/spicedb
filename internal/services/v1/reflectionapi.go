@@ -1,11 +1,12 @@
 package v1
 
 import (
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 
 	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
-	"golang.org/x/exp/maps"
 
 	"github.com/authzed/spicedb/pkg/caveats"
 	caveattypes "github.com/authzed/spicedb/pkg/caveats/types"
@@ -181,6 +182,7 @@ func convertDiff(
 	existingSchema *diff.DiffableSchema,
 	comparisonSchema *diff.DiffableSchema,
 	atRevision datastore.Revision,
+	caveatTypeSet *caveattypes.TypeSet,
 ) (*v1.DiffSchemaResponse, error) {
 	size := len(diff.AddedNamespaces) + len(diff.RemovedNamespaces) + len(diff.AddedCaveats) + len(diff.RemovedCaveats) + len(diff.ChangedNamespaces) + len(diff.ChangedCaveats)
 	diffs := make([]*v1.ReflectionSchemaDiff, 0, size)
@@ -214,7 +216,7 @@ func convertDiff(
 
 	// Add/remove caveats.
 	for _, caveat := range diff.AddedCaveats {
-		caveatDef, err := caveatAPIReprForName(caveat, comparisonSchema)
+		caveatDef, err := caveatAPIReprForName(caveat, comparisonSchema, caveatTypeSet)
 		if err != nil {
 			return nil, err
 		}
@@ -227,7 +229,7 @@ func convertDiff(
 	}
 
 	for _, caveat := range diff.RemovedCaveats {
-		caveatDef, err := caveatAPIReprForName(caveat, existingSchema)
+		caveatDef, err := caveatAPIReprForName(caveat, existingSchema, caveatTypeSet)
 		if err != nil {
 			return nil, err
 		}
@@ -434,7 +436,7 @@ func convertDiff(
 		for _, delta := range caveatDiff.Deltas() {
 			switch delta.Type {
 			case caveatdiff.CaveatCommentsChanged:
-				caveat, err := caveatAPIReprForName(caveatName, comparisonSchema)
+				caveat, err := caveatAPIReprForName(caveatName, comparisonSchema, caveatTypeSet)
 				if err != nil {
 					return nil, err
 				}
@@ -446,7 +448,7 @@ func convertDiff(
 				})
 
 			case caveatdiff.AddedParameter:
-				paramDef, err := caveatAPIParamRepr(delta.ParameterName, caveatName, comparisonSchema)
+				paramDef, err := caveatAPIParamRepr(delta.ParameterName, caveatName, comparisonSchema, caveatTypeSet)
 				if err != nil {
 					return nil, err
 				}
@@ -458,7 +460,7 @@ func convertDiff(
 				})
 
 			case caveatdiff.RemovedParameter:
-				paramDef, err := caveatAPIParamRepr(delta.ParameterName, caveatName, existingSchema)
+				paramDef, err := caveatAPIParamRepr(delta.ParameterName, caveatName, existingSchema, caveatTypeSet)
 				if err != nil {
 					return nil, err
 				}
@@ -470,12 +472,12 @@ func convertDiff(
 				})
 
 			case caveatdiff.ParameterTypeChanged:
-				previousParamDef, err := caveatAPIParamRepr(delta.ParameterName, caveatName, existingSchema)
+				previousParamDef, err := caveatAPIParamRepr(delta.ParameterName, caveatName, existingSchema, caveatTypeSet)
 				if err != nil {
 					return nil, err
 				}
 
-				paramDef, err := caveatAPIParamRepr(delta.ParameterName, caveatName, comparisonSchema)
+				paramDef, err := caveatAPIParamRepr(delta.ParameterName, caveatName, comparisonSchema, caveatTypeSet)
 				if err != nil {
 					return nil, err
 				}
@@ -490,7 +492,7 @@ func convertDiff(
 				})
 
 			case caveatdiff.CaveatExpressionChanged:
-				caveat, err := caveatAPIReprForName(caveatName, comparisonSchema)
+				caveat, err := caveatAPIReprForName(caveatName, comparisonSchema, caveatTypeSet)
 				if err != nil {
 					return nil, err
 				}
@@ -633,23 +635,23 @@ func typeAPIRepr(subjectType *core.AllowedRelation) *v1.ReflectionTypeReference 
 }
 
 // caveatAPIReprForName builds an API representation of a caveat.
-func caveatAPIReprForName(caveatName string, schema *diff.DiffableSchema) (*v1.ReflectionCaveat, error) {
+func caveatAPIReprForName(caveatName string, schema *diff.DiffableSchema, caveatTypeSet *caveattypes.TypeSet) (*v1.ReflectionCaveat, error) {
 	caveatDef, ok := schema.GetCaveat(caveatName)
 	if !ok {
 		return nil, spiceerrors.MustBugf("caveat %q not found in schema", caveatName)
 	}
 
-	return caveatAPIRepr(caveatDef, nil)
+	return caveatAPIRepr(caveatDef, nil, caveatTypeSet)
 }
 
 // caveatAPIRepr builds an API representation of a caveat.
-func caveatAPIRepr(caveatDef *core.CaveatDefinition, schemaFilters *schemaFilters) (*v1.ReflectionCaveat, error) {
+func caveatAPIRepr(caveatDef *core.CaveatDefinition, schemaFilters *schemaFilters, caveatTypeSet *caveattypes.TypeSet) (*v1.ReflectionCaveat, error) {
 	if schemaFilters != nil && !schemaFilters.HasCaveat(caveatDef.Name) {
 		return nil, nil
 	}
 
 	parameters := make([]*v1.ReflectionCaveatParameter, 0, len(caveatDef.ParameterTypes))
-	paramNames := maps.Keys(caveatDef.ParameterTypes)
+	paramNames := slices.Collect(maps.Keys(caveatDef.ParameterTypes))
 	sort.Strings(paramNames)
 
 	for _, paramName := range paramNames {
@@ -658,7 +660,7 @@ func caveatAPIRepr(caveatDef *core.CaveatDefinition, schemaFilters *schemaFilter
 			return nil, spiceerrors.MustBugf("parameter %q not found in caveat %q", paramName, caveatDef.Name)
 		}
 
-		decoded, err := caveattypes.DecodeParameterType(paramType)
+		decoded, err := caveattypes.DecodeParameterType(caveatTypeSet, paramType)
 		if err != nil {
 			return nil, spiceerrors.MustBugf("invalid parameter type on caveat: %v", err)
 		}
@@ -670,12 +672,12 @@ func caveatAPIRepr(caveatDef *core.CaveatDefinition, schemaFilters *schemaFilter
 		})
 	}
 
-	parameterTypes, err := caveattypes.DecodeParameterTypes(caveatDef.ParameterTypes)
+	parameterTypes, err := caveattypes.DecodeParameterTypes(caveatTypeSet, caveatDef.ParameterTypes)
 	if err != nil {
 		return nil, spiceerrors.MustBugf("invalid caveat parameters: %v", err)
 	}
 
-	deserializedReflectionression, err := caveats.DeserializeCaveat(caveatDef.SerializedExpression, parameterTypes)
+	deserializedReflectionression, err := caveats.DeserializeCaveatWithTypeSet(caveatTypeSet, caveatDef.SerializedExpression, parameterTypes)
 	if err != nil {
 		return nil, spiceerrors.MustBugf("invalid caveat expression bytes: %v", err)
 	}
@@ -695,7 +697,7 @@ func caveatAPIRepr(caveatDef *core.CaveatDefinition, schemaFilters *schemaFilter
 }
 
 // caveatAPIParamRepresentation builds an API representation of a caveat parameter.
-func caveatAPIParamRepr(paramName, parentCaveatName string, schema *diff.DiffableSchema) (*v1.ReflectionCaveatParameter, error) {
+func caveatAPIParamRepr(paramName, parentCaveatName string, schema *diff.DiffableSchema, caveatTypeSet *caveattypes.TypeSet) (*v1.ReflectionCaveatParameter, error) {
 	caveatDef, ok := schema.GetCaveat(parentCaveatName)
 	if !ok {
 		return nil, spiceerrors.MustBugf("caveat %q not found in schema", parentCaveatName)
@@ -706,7 +708,7 @@ func caveatAPIParamRepr(paramName, parentCaveatName string, schema *diff.Diffabl
 		return nil, spiceerrors.MustBugf("parameter %q not found in caveat %q", paramName, parentCaveatName)
 	}
 
-	decoded, err := caveattypes.DecodeParameterType(paramType)
+	decoded, err := caveattypes.DecodeParameterType(caveatTypeSet, paramType)
 	if err != nil {
 		return nil, spiceerrors.MustBugf("invalid parameter type on caveat: %v", err)
 	}

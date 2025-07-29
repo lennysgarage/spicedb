@@ -8,33 +8,21 @@ import (
 	"os"
 	"strings"
 
-	"github.com/authzed/ctxkey"
 	"github.com/magefile/mage/mg"
 	"github.com/magefile/mage/sh"
 )
 
 type Test mg.Namespace
 
-var (
-	emptyEnv map[string]string
-	ctxMyKey = ctxkey.New[bool]()
-)
+var emptyEnv map[string]string
 
 // All Runs all test suites
-func (t Test) All(ctx context.Context) error {
+func (t Test) All(ctx context.Context) {
 	ds := Testds{}
 	c := Testcons{}
-	cover := parseCommandLineFlags()
-	ctx = ctxMyKey.WithValue(ctx, cover)
 	mg.CtxDeps(ctx, t.Unit, t.Integration, t.Steelthread, t.Image, t.Analyzers,
 		ds.Crdb, ds.Postgres, ds.Spanner, ds.Mysql,
 		c.Crdb, c.Spanner, c.Postgres, c.Mysql)
-
-	if !cover {
-		return nil
-	}
-
-	return combineCoverage()
 }
 
 // UnitCover Runs the unit tests and generates a coverage report
@@ -55,7 +43,10 @@ func (Test) unit(ctx context.Context, coverage bool) error {
 	fmt.Println("running unit tests")
 	args := []string{"-tags", "ci,skipintegrationtests", "-race", "-timeout", "20m", "-count=1"}
 	if coverage {
-		args = append(args, "-covermode=atomic", "-coverprofile=coverage.txt")
+		fmt.Println("running unit tests with coverage")
+		args = append(args, coverageFlags...)
+	} else {
+		fmt.Println("running unit tests")
 	}
 	return goTest(ctx, "./...", args...)
 }
@@ -70,6 +61,14 @@ func (Test) Image(ctx context.Context) error {
 func (Test) Integration(ctx context.Context) error {
 	mg.Deps(checkDocker)
 	return goTest(ctx, "./internal/services/integrationtesting/...", "-tags", "ci,docker", "-timeout", "15m")
+}
+
+// Integration Run integration tests with cover
+func (Test) IntegrationCover(ctx context.Context) error {
+	mg.Deps(checkDocker)
+	args := []string{"-tags", "ci,docker", "-timeout", "15m", "-count=1"}
+	args = append(args, coverageFlags...)
+	return goTest(ctx, "./internal/services/integrationtesting/...", args...)
 }
 
 // Steelthread Run steelthread tests
@@ -180,7 +179,7 @@ func (tc Testcons) CrdbVer(ctx context.Context, version string) error {
 }
 
 func (Testcons) crdb(ctx context.Context, version string) error {
-	return consistencyTest(ctx, "crdb", map[string]string{
+	return consistencyTest(ctx, "cockroachdb", map[string]string{
 		"CRDB_TEST_VERSION": version,
 	})
 }

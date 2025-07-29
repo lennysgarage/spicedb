@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/uuid"
-	"github.com/scylladb/go-set/strset"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/structpb"
+
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 
 	"github.com/authzed/spicedb/internal/datastore/common"
 	"github.com/authzed/spicedb/pkg/datastore"
@@ -66,7 +66,7 @@ func WatchTest(t *testing.T, tester DatastoreTester) {
 
 			setupDatastore(ds, require)
 
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
 			lowestRevision, err := ds.HeadRevision(ctx)
@@ -164,8 +164,8 @@ func VerifyUpdates(
 			expectedChangeSet := setOfChanges(expected)
 			actualChangeSet := setOfChanges(change.RelationshipChanges)
 
-			missingExpected := strset.Difference(expectedChangeSet, actualChangeSet)
-			unexpected := strset.Difference(actualChangeSet, expectedChangeSet)
+			missingExpected := expectedChangeSet.Difference(actualChangeSet)
+			unexpected := actualChangeSet.Difference(expectedChangeSet)
 
 			require.True(missingExpected.IsEmpty(), "expected changes missing: %s", missingExpected)
 			require.True(unexpected.IsEmpty(), "unexpected changes: %s", unexpected)
@@ -206,8 +206,8 @@ func VerifyUpdatesWithMetadata(
 			expectedChangeSet := setOfChanges(expected.updates)
 			actualChangeSet := setOfChanges(change.RelationshipChanges)
 
-			missingExpected := strset.Difference(expectedChangeSet, actualChangeSet)
-			unexpected := strset.Difference(actualChangeSet, expectedChangeSet)
+			missingExpected := expectedChangeSet.Difference(actualChangeSet)
+			unexpected := actualChangeSet.Difference(expectedChangeSet)
 
 			require.True(missingExpected.IsEmpty(), "expected changes missing: %s", missingExpected)
 			require.True(unexpected.IsEmpty(), "unexpected changes: %s", unexpected)
@@ -223,8 +223,8 @@ func VerifyUpdatesWithMetadata(
 	require.False(expectDisconnect, "all changes verified without expected disconnect")
 }
 
-func setOfChanges(changes []tuple.RelationshipUpdate) *strset.Set {
-	changeSet := strset.NewWithSize(len(changes))
+func setOfChanges(changes []tuple.RelationshipUpdate) *mapz.Set[string] {
+	changeSet := mapz.NewSet[string]()
 	for _, change := range changes {
 		changeSet.Add(change.DebugString())
 	}
@@ -241,7 +241,7 @@ func WatchCancelTest(t *testing.T, tester DatastoreTester) {
 
 	startWatchRevision := setupDatastore(ds, require)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	changes, errchan := ds.Watch(ctx, startWatchRevision, datastore.WatchJustRelationships())
 	require.Zero(len(errchan))
 
@@ -287,7 +287,7 @@ func WatchWithTouchTest(t *testing.T, tester DatastoreTester) {
 
 	setupDatastore(ds, require)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	lowestRevision, err := ds.HeadRevision(ctx)
@@ -392,7 +392,7 @@ func WatchWithExpirationTest(t *testing.T, tester DatastoreTester) {
 
 	setupDatastore(ds, require)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	lowestRevision, err := ds.HeadRevision(ctx)
@@ -433,7 +433,7 @@ func WatchWithMetadataTest(t *testing.T, tester DatastoreTester) {
 
 	setupDatastore(ds, require)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	lowestRevision, err := ds.HeadRevision(ctx)
@@ -472,7 +472,7 @@ func WatchWithDeleteTest(t *testing.T, tester DatastoreTester) {
 
 	setupDatastore(ds, require)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	lowestRevision, err := ds.HeadRevision(ctx)
@@ -564,7 +564,7 @@ func WatchSchemaTest(t *testing.T, tester DatastoreTester) {
 
 	setupDatastore(ds, require)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	lowestRevision, err := ds.HeadRevision(ctx)
@@ -656,7 +656,7 @@ func WatchAllTest(t *testing.T, tester DatastoreTester) {
 
 	setupDatastore(ds, require)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	lowestRevision, err := ds.HeadRevision(ctx)
@@ -788,7 +788,7 @@ func WatchCheckpointsTest(t *testing.T, tester DatastoreTester) {
 
 	setupDatastore(ds, require)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	lowestRevision, err := ds.HeadRevision(ctx)
@@ -823,16 +823,13 @@ func WatchEmissionStrategyTest(t *testing.T, tester DatastoreTester) {
 
 	setupDatastore(ds, require)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	features, err := ds.Features(ctx)
 	require.NoError(err)
 
-	expectsWatchError := false
-	if !(features.WatchEmitsImmediately.Status == datastore.FeatureSupported) {
-		expectsWatchError = true
-	}
+	expectsWatchError := (features.WatchEmitsImmediately.Status != datastore.FeatureSupported)
 
 	lowestRevision, err := ds.HeadRevision(ctx)
 	require.NoError(err)

@@ -1,16 +1,17 @@
 package spanner
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"strings"
 
 	"cloud.google.com/go/spanner"
 	sq "github.com/Masterminds/squirrel"
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/ccoveille/go-safecast"
-	"github.com/jzelinskie/stringz"
 
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+
+	"github.com/authzed/spicedb/internal/datastore/common"
 	"github.com/authzed/spicedb/internal/datastore/revisions"
 	log "github.com/authzed/spicedb/internal/logging"
 	"github.com/authzed/spicedb/pkg/datastore"
@@ -281,7 +282,7 @@ func deleteWithFilterAndNoLimit(ctx context.Context, rwt *spanner.ReadWriteTrans
 }
 
 type builder[T any] interface {
-	Where(pred interface{}, args ...interface{}) T
+	Where(pred any, args ...any) T
 }
 
 func applyFilterToQuery[T builder[T]](query T, filter *v1.RelationshipFilter) (T, error) {
@@ -296,11 +297,11 @@ func applyFilterToQuery[T builder[T]](query T, filter *v1.RelationshipFilter) (T
 		query = query.Where(sq.Eq{colRelation: filter.OptionalRelation})
 	}
 	if filter.OptionalResourceIdPrefix != "" {
-		if strings.Contains(filter.OptionalResourceIdPrefix, "%") {
-			return query, fmt.Errorf("unable to delete relationships with a prefix containing the %% character")
+		likeClause, err := common.BuildLikePrefixClause(colObjectID, filter.OptionalResourceIdPrefix)
+		if err != nil {
+			return query, fmt.Errorf(errUnableToDeleteRelationships, err)
 		}
-
-		query = query.Where(sq.Like{colObjectID: filter.OptionalResourceIdPrefix + "%"})
+		query = query.Where(likeClause)
 	}
 
 	// Add clauses for the SubjectFilter
@@ -310,7 +311,7 @@ func applyFilterToQuery[T builder[T]](query T, filter *v1.RelationshipFilter) (T
 			query = query.Where(sq.Eq{colUsersetObjectID: subjectFilter.OptionalSubjectId})
 		}
 		if relationFilter := subjectFilter.OptionalRelation; relationFilter != nil {
-			query = query.Where(sq.Eq{colUsersetRelation: stringz.DefaultEmpty(relationFilter.Relation, datastore.Ellipsis)})
+			query = query.Where(sq.Eq{colUsersetRelation: cmp.Or(relationFilter.Relation, datastore.Ellipsis)})
 		}
 	}
 

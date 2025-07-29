@@ -40,20 +40,20 @@ func TestDatastoreRequestHedging(t *testing.T) {
 	testCases := []struct {
 		methodName        string
 		useSnapshotReader bool
-		arguments         []interface{}
-		firstCallResults  []interface{}
-		secondCallResults []interface{}
+		arguments         []any
+		firstCallResults  []any
+		secondCallResults []any
 		f                 testFunc
 	}{
 		{
 			"ReadNamespaceByName",
 			true,
-			[]interface{}{nsKnown},
-			[]interface{}{&core.NamespaceDefinition{}, revisionKnown, errKnown},
-			[]interface{}{&core.NamespaceDefinition{}, anotherRevisionKnown, errKnown},
+			[]any{nsKnown},
+			[]any{&core.NamespaceDefinition{}, revisionKnown, errKnown},
+			[]any{&core.NamespaceDefinition{}, anotherRevisionKnown, errKnown},
 			func(t *testing.T, proxy datastore.Datastore, expectFirst bool) {
 				require := require.New(t)
-				_, rev, err := proxy.SnapshotReader(datastore.NoRevision).ReadNamespaceByName(context.Background(), nsKnown)
+				_, rev, err := proxy.SnapshotReader(datastore.NoRevision).ReadNamespaceByName(t.Context(), nsKnown)
 				require.ErrorIs(errKnown, err)
 				if expectFirst {
 					require.Equal(revisionKnown, rev)
@@ -65,12 +65,12 @@ func TestDatastoreRequestHedging(t *testing.T) {
 		{
 			"OptimizedRevision",
 			false,
-			[]interface{}{mock.Anything, mock.Anything},
-			[]interface{}{revisionKnown, errKnown},
-			[]interface{}{anotherRevisionKnown, errKnown},
+			[]any{mock.Anything, mock.Anything},
+			[]any{revisionKnown, errKnown},
+			[]any{anotherRevisionKnown, errKnown},
 			func(t *testing.T, proxy datastore.Datastore, expectFirst bool) {
 				require := require.New(t)
-				rev, err := proxy.OptimizedRevision(context.Background())
+				rev, err := proxy.OptimizedRevision(t.Context())
 				require.ErrorIs(errKnown, err)
 				if expectFirst {
 					require.Equal(revisionKnown, rev)
@@ -82,12 +82,12 @@ func TestDatastoreRequestHedging(t *testing.T) {
 		{
 			"HeadRevision",
 			false,
-			[]interface{}{mock.Anything},
-			[]interface{}{revisionKnown, errKnown},
-			[]interface{}{anotherRevisionKnown, errKnown},
+			[]any{mock.Anything},
+			[]any{revisionKnown, errKnown},
+			[]any{anotherRevisionKnown, errKnown},
 			func(t *testing.T, proxy datastore.Datastore, expectFirst bool) {
 				require := require.New(t)
-				rev, err := proxy.HeadRevision(context.Background())
+				rev, err := proxy.HeadRevision(t.Context())
 				require.ErrorIs(errKnown, err)
 				if expectFirst {
 					require.Equal(revisionKnown, rev)
@@ -99,14 +99,14 @@ func TestDatastoreRequestHedging(t *testing.T) {
 		{
 			"QueryRelationships",
 			true,
-			[]interface{}{mock.Anything, mock.Anything},
-			[]interface{}{emptyIterator, errKnown},
-			[]interface{}{emptyIterator, errAnotherKnown},
+			[]any{mock.Anything, mock.Anything},
+			[]any{emptyIterator, errKnown},
+			[]any{emptyIterator, errAnotherKnown},
 			func(t *testing.T, proxy datastore.Datastore, expectFirst bool) {
 				require := require.New(t)
 				_, err := proxy.
 					SnapshotReader(datastore.NoRevision).
-					QueryRelationships(context.Background(), datastore.RelationshipsFilter{})
+					QueryRelationships(t.Context(), datastore.RelationshipsFilter{})
 				if expectFirst {
 					require.ErrorIs(errKnown, err)
 				} else {
@@ -117,14 +117,14 @@ func TestDatastoreRequestHedging(t *testing.T) {
 		{
 			"ReverseQueryRelationships",
 			true,
-			[]interface{}{mock.Anything, mock.Anything},
-			[]interface{}{emptyIterator, errKnown},
-			[]interface{}{emptyIterator, errAnotherKnown},
+			[]any{mock.Anything, mock.Anything},
+			[]any{emptyIterator, errKnown},
+			[]any{emptyIterator, errAnotherKnown},
 			func(t *testing.T, proxy datastore.Datastore, expectFirst bool) {
 				require := require.New(t)
 				_, err := proxy.
 					SnapshotReader(datastore.NoRevision).
-					ReverseQueryRelationships(context.Background(), datastore.SubjectsFilter{})
+					ReverseQueryRelationships(t.Context(), datastore.SubjectsFilter{})
 				if expectFirst {
 					require.ErrorIs(errKnown, err)
 				} else {
@@ -216,7 +216,7 @@ func TestDigestRollover(t *testing.T) {
 
 	done := autoAdvance(mockTime, slowQueryTime/4, slowQueryTime*2)
 
-	_, err := proxy.HeadRevision(context.Background())
+	_, err := proxy.HeadRevision(t.Context())
 	require.ErrorIs(err, errKnown)
 	delegate.AssertExpectations(t)
 
@@ -233,7 +233,7 @@ func TestDigestRollover(t *testing.T) {
 	done = autoAdvance(mockTime, 100*time.Microsecond, 205*100*time.Microsecond)
 
 	for i := 0; i < 200; i++ {
-		_, err := proxy.HeadRevision(context.Background())
+		_, err := proxy.HeadRevision(t.Context())
 		require.ErrorIs(err, errKnown)
 	}
 	<-done
@@ -255,7 +255,7 @@ func TestDigestRollover(t *testing.T) {
 
 	autoAdvance(mockTime, 100*time.Microsecond, slowQueryTime)
 
-	_, err = proxy.HeadRevision(context.Background())
+	_, err = proxy.HeadRevision(t.Context())
 	require.ErrorIs(errAnotherKnown, err)
 	delegate.AssertExpectations(t)
 }
@@ -309,7 +309,7 @@ func TestDatastoreE2E(t *testing.T) {
 	autoAdvance(mockTime, slowQueryTime/2, 2*slowQueryTime)
 
 	it, err := proxy.SnapshotReader(revisionKnown).QueryRelationships(
-		context.Background(), datastore.RelationshipsFilter{
+		t.Context(), datastore.RelationshipsFilter{
 			OptionalResourceType: "document",
 		},
 	)
@@ -339,7 +339,7 @@ func TestContextCancellation(t *testing.T) {
 		WaitUntil(mockTime.After(500 * time.Microsecond)).
 		Once()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
 		mockTime.Sleep(100 * time.Microsecond)
 		cancel()

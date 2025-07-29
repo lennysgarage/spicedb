@@ -13,8 +13,10 @@ import (
 	"github.com/authzed/spicedb/internal/graph/computed"
 	"github.com/authzed/spicedb/internal/graph/hints"
 	datastoremw "github.com/authzed/spicedb/internal/middleware/datastore"
+	caveattypes "github.com/authzed/spicedb/pkg/caveats/types"
 	"github.com/authzed/spicedb/pkg/datastore"
 	"github.com/authzed/spicedb/pkg/datastore/options"
+	"github.com/authzed/spicedb/pkg/datastore/queryshape"
 	"github.com/authzed/spicedb/pkg/genutil/mapz"
 	core "github.com/authzed/spicedb/pkg/proto/core/v1"
 	v1 "github.com/authzed/spicedb/pkg/proto/dispatch/v1"
@@ -28,13 +30,14 @@ import (
 // production.
 const dispatchVersion = 1
 
-func NewCursoredLookupResources2(dl dispatch.LookupResources2, dc dispatch.Check, concurrencyLimit uint16, dispatchChunkSize uint16) *CursoredLookupResources2 {
-	return &CursoredLookupResources2{dl, dc, concurrencyLimit, dispatchChunkSize}
+func NewCursoredLookupResources2(dl dispatch.LookupResources2, dc dispatch.Check, caveatTypeSet *caveattypes.TypeSet, concurrencyLimit uint16, dispatchChunkSize uint16) *CursoredLookupResources2 {
+	return &CursoredLookupResources2{dl, dc, caveatTypeSet, concurrencyLimit, dispatchChunkSize}
 }
 
 type CursoredLookupResources2 struct {
 	dl                dispatch.LookupResources2
 	dc                dispatch.Check
+	caveatTypeSet     *caveattypes.TypeSet
 	concurrencyLimit  uint16
 	dispatchChunkSize uint16
 }
@@ -300,6 +303,19 @@ func (crr *CursoredLookupResources2) redispatchOrReportOverDatabaseQuery(
 	))
 	defer span.End()
 
+	vts, err := config.ts.GetValidatedDefinition(ctx, config.sourceResourceType.Namespace)
+	if err != nil {
+		return err
+	}
+
+	possibleTraits, err := vts.PossibleTraitsForSubject(config.sourceResourceType.Relation, config.subjectsFilter.SubjectType)
+	if err != nil {
+		return err
+	}
+
+	skipCaveats := !possibleTraits.AllowsCaveats
+	skipExpiration := !possibleTraits.AllowsExpiration
+
 	return withDatastoreCursorInCursor(ctx, config.ci, config.parentStream, config.concurrencyLimit,
 		// Find the target resources for the subject.
 		func(queryCursor options.Cursor) ([]itemAndPostCursor[dispatchableResourcesSubjectMap2], error) {
@@ -312,6 +328,9 @@ func (crr *CursoredLookupResources2) redispatchOrReportOverDatabaseQuery(
 				}),
 				options.WithSortForReverse(options.BySubject),
 				options.WithAfterForReverse(queryCursor),
+				options.WithQueryShapeForReverse(queryshape.MatchingResourcesForSubject),
+				options.WithSkipCaveatsForReverse(skipCaveats),
+				options.WithSkipExpirationForReverse(skipExpiration),
 			)
 			if err != nil {
 				return nil, err
@@ -322,7 +341,7 @@ func (crr *CursoredLookupResources2) redispatchOrReportOverDatabaseQuery(
 			rsm := newResourcesSubjectMap2WithCapacity(config.sourceResourceType, uint32(crr.dispatchChunkSize))
 			toBeHandled := make([]itemAndPostCursor[dispatchableResourcesSubjectMap2], 0)
 			currentCursor := queryCursor
-			caveatRunner := caveats.NewCaveatRunner()
+			caveatRunner := caveats.NewCaveatRunner(crr.caveatTypeSet)
 
 			for rel, err := range it {
 				if err != nil {
@@ -553,7 +572,7 @@ func (crr *CursoredLookupResources2) redispatchOrReport(
 							checkHints = append(checkHints, checkHint)
 						}
 
-						resultsByResourceID, checkMetadata, _, err := computed.ComputeBulkCheck(ctx, crr.dc, computed.CheckParameters{
+						resultsByResourceID, checkMetadata, _, err := computed.ComputeBulkCheck(ctx, crr.dc, crr.caveatTypeSet, computed.CheckParameters{
 							ResourceType:  tuple.FromCoreRelationReference(parentRequest.ResourceRelation),
 							Subject:       tuple.FromCoreObjectAndRelation(parentRequest.TerminalSubject),
 							CaveatContext: parentRequest.Context.AsMap(),
@@ -669,6 +688,7 @@ func (crr *CursoredLookupResources2) redispatchOrReport(
 				entrypoint,
 				crr.dl,
 				crr.dc,
+				crr.caveatTypeSet,
 				crr.concurrencyLimit,
 				crr.dispatchChunkSize,
 			)

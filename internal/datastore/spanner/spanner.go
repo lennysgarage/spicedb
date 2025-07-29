@@ -86,6 +86,7 @@ type spannerDatastore struct {
 
 	watchBufferLength       uint16
 	watchBufferWriteTimeout time.Duration
+	watchEnabled            bool
 
 	client   *spanner.Client
 	config   spannerOptions
@@ -93,7 +94,7 @@ type spannerDatastore struct {
 	schema   common.SchemaInformation
 
 	cachedEstimatedBytesPerRelationshipLock sync.RWMutex
-	cachedEstimatedBytesPerRelationship     uint64
+	cachedEstimatedBytesPerRelationship     uint64 // GUARDED_BY(cachedEstimatedBytesPerRelationshipLock)
 
 	tableSizesStatsTable string
 	filterMaximumIDCount uint16
@@ -206,6 +207,18 @@ func NewSpannerDatastore(ctx context.Context, database string, opts ...Option) (
 		common.WithPlaceholderFormat(sq.AtP),
 		common.WithNowFunction("CURRENT_TIMESTAMP"),
 		common.WithColumnOptimization(config.columnOptimizationOption),
+
+		// NOTE: this order differs from the default because the index
+		// used for sorting by subject (ix_relation_tuple_by_subject) is
+		// defined with the userset object ID first.
+		common.SetSortBySubjectColumnOrder([]string{
+			colUsersetObjectID,
+			colUsersetNamespace,
+			colUsersetRelation,
+			colNamespace,
+			colRelation,
+			colObjectID,
+		}),
 	)
 
 	ds := &spannerDatastore{
@@ -224,6 +237,7 @@ func NewSpannerDatastore(ctx context.Context, database string, opts ...Option) (
 		database:                                database,
 		watchBufferWriteTimeout:                 config.watchBufferWriteTimeout,
 		watchBufferLength:                       config.watchBufferLength,
+		watchEnabled:                            !config.watchDisabled,
 		cachedEstimatedBytesPerRelationship:     0,
 		cachedEstimatedBytesPerRelationshipLock: sync.RWMutex{},
 		tableSizesStatsTable:                    tableSizesStatsTable,
@@ -234,7 +248,7 @@ func NewSpannerDatastore(ctx context.Context, database string, opts ...Option) (
 	// current timestamp.
 	// TODO: Still investigating whether a stale read can be used for
 	//       HeadRevision for FullConsistency queries.
-	ds.RemoteClockRevisions.SetNowFunc(ds.staleHeadRevision)
+	ds.SetNowFunc(ds.staleHeadRevision)
 
 	return ds, nil
 }
@@ -373,9 +387,14 @@ func (sd *spannerDatastore) Features(ctx context.Context) (*datastore.Features, 
 }
 
 func (sd *spannerDatastore) OfflineFeatures() (*datastore.Features, error) {
+	watchSupported := datastore.FeatureUnsupported
+	if sd.watchEnabled {
+		watchSupported = datastore.FeatureSupported
+	}
+
 	return &datastore.Features{
 		Watch: datastore.Feature{
-			Status: datastore.FeatureSupported,
+			Status: watchSupported,
 		},
 		IntegrityData: datastore.Feature{
 			Status: datastore.FeatureUnsupported,

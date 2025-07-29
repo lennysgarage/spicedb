@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/samber/lo"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -22,6 +21,7 @@ import (
 	"github.com/authzed/spicedb/pkg/datastore/options"
 	"github.com/authzed/spicedb/pkg/datastore/queryshape"
 	"github.com/authzed/spicedb/pkg/genutil/mapz"
+	"github.com/authzed/spicedb/pkg/genutil/slicez"
 	"github.com/authzed/spicedb/pkg/middleware/nodeid"
 	nspkg "github.com/authzed/spicedb/pkg/namespace"
 	core "github.com/authzed/spicedb/pkg/proto/core/v1"
@@ -138,7 +138,7 @@ func (cc *ConcurrentChecker) Check(ctx context.Context, req ValidatedCheckReques
 
 	// Remove the traversal bloom from the debug request to save some data over the
 	// wire.
-	clonedRequest := req.DispatchCheckRequest.CloneVT()
+	clonedRequest := req.CloneVT()
 	clonedRequest.Metadata.TraversalBloom = nil
 
 	debugInfo.Check.Request = clonedRequest
@@ -151,8 +151,8 @@ func (cc *ConcurrentChecker) Check(ctx context.Context, req ValidatedCheckReques
 	}
 
 	// Build the results for the debug trace.
-	results := make(map[string]*v1.ResourceCheckResult, len(req.DispatchCheckRequest.ResourceIds))
-	for _, resourceID := range req.DispatchCheckRequest.ResourceIds {
+	results := make(map[string]*v1.ResourceCheckResult, len(req.ResourceIds))
+	for _, resourceID := range req.ResourceIds {
 		if found, ok := resolved.Resp.ResultsByResourceId[resourceID]; ok {
 			results[resourceID] = found
 		}
@@ -193,7 +193,7 @@ func (cc *ConcurrentChecker) checkInternal(ctx context.Context, req ValidatedChe
 	}
 
 	// Deduplicate any incoming resource IDs.
-	resourceIds := lo.Uniq(req.ResourceIds)
+	resourceIds := slicez.Unique(req.ResourceIds)
 
 	// Filter the incoming resource IDs for any which match the subject directly. For example, if we receive
 	// a check for resource `user:{tom, fred, sarah}#...` and a subject of `user:sarah#...`, then we know
@@ -202,7 +202,7 @@ func (cc *ConcurrentChecker) checkInternal(ctx context.Context, req ValidatedChe
 	// If the filtering results in no further resource IDs to check, or a result is found and a single
 	// result is allowed, we terminate early.
 	membershipSet, filteredResourcesIds := filterForFoundMemberResource(req.ResourceRelation, resourceIds, req.Subject)
-	if membershipSet.HasDeterminedMember() && req.DispatchCheckRequest.ResultsSetting == v1.DispatchCheckRequest_ALLOW_SINGLE_RESULT {
+	if membershipSet.HasDeterminedMember() && req.ResultsSetting == v1.DispatchCheckRequest_ALLOW_SINGLE_RESULT {
 		return checkResultsForMembership(membershipSet, emptyMetadata)
 	}
 
@@ -618,14 +618,15 @@ func (cc *ConcurrentChecker) checkComputedUserset(ctx context.Context, crc curre
 
 	var startNamespace string
 	var targetResourceIds []string
-	if cu.Object == core.ComputedUserset_TUPLE_USERSET_OBJECT {
+	switch cu.Object {
+	case core.ComputedUserset_TUPLE_USERSET_OBJECT:
 		if rr == nil || len(resourceIds) == 0 {
 			return checkResultError(spiceerrors.MustBugf("computed userset for tupleset without tuples"), emptyMetadata)
 		}
 
 		startNamespace = rr.ObjectType
 		targetResourceIds = resourceIds
-	} else if cu.Object == core.ComputedUserset_TUPLE_OBJECT {
+	case core.ComputedUserset_TUPLE_OBJECT:
 		if rr != nil {
 			return checkResultError(spiceerrors.MustBugf("computed userset for tupleset with wrong object type"), emptyMetadata)
 		}
@@ -722,12 +723,14 @@ func TraitsForArrowRelation(ctx context.Context, reader datastore.Reader, namesp
 }
 
 func queryOptionsForArrowRelation(ctx context.Context, ds datastore.Reader, namespaceName string, relationName string) ([]options.QueryOptionsOption, error) {
+	opts := make([]options.QueryOptionsOption, 0, 3)
+	opts = append(opts, options.WithQueryShape(queryshape.AllSubjectsForResources))
+
 	traits, err := TraitsForArrowRelation(ctx, ds, namespaceName, relationName)
 	if err != nil {
 		return nil, err
 	}
 
-	opts := []options.QueryOptionsOption{}
 	if !traits.HasCaveats {
 		opts = append(opts, options.WithSkipCaveats(true))
 	}
@@ -985,6 +988,9 @@ func checkTupleToUserset[T relation](
 		toDispatch,
 		func(ctx context.Context, crc currentRequestContext, dd checkDispatchChunk) CheckResult {
 			resourceType := dd.resourceType
+			if dd.hasIncomingCaveats {
+				crc.resultsSetting = v1.DispatchCheckRequest_REQUIRE_ALL_RESULTS
+			}
 			childResult := cc.checkComputedUserset(ctx, crc, ttu.GetComputedUserset(), &resourceType, dd.resourceIds)
 			if childResult.Err != nil {
 				return childResult
@@ -1145,7 +1151,7 @@ func all[T any](
 	return checkResultsForMembership(membershipSet, responseMetadata)
 }
 
-// difference returns whether the first lazy check passes and none of the supsequent checks pass.
+// difference returns whether the first lazy check passes and none of the subsequent checks pass.
 func difference[T any](
 	ctx context.Context,
 	crc currentRequestContext,

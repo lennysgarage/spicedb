@@ -5,12 +5,12 @@ import (
 	"errors"
 	"time"
 
+	sq "github.com/Masterminds/squirrel"
+
 	"github.com/authzed/spicedb/internal/datastore/common"
 	"github.com/authzed/spicedb/internal/datastore/revisions"
 	"github.com/authzed/spicedb/pkg/datastore"
 	"github.com/authzed/spicedb/pkg/tuple"
-
-	sq "github.com/Masterminds/squirrel"
 )
 
 const (
@@ -28,6 +28,12 @@ func (mds *Datastore) Watch(ctx context.Context, afterRevisionRaw datastore.Revi
 
 	updates := make(chan datastore.RevisionChanges, watchBufferLength)
 	errs := make(chan error, 1)
+
+	if !mds.watchEnabled {
+		close(updates)
+		errs <- datastore.NewWatchDisabledErr("watch is disabled")
+		return updates, errs
+	}
 
 	if options.Content&datastore.WatchSchema == datastore.WatchSchema {
 		close(updates)

@@ -1,6 +1,7 @@
 package tuple
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -9,8 +10,6 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/types/known/structpb"
-
-	"github.com/jzelinskie/stringz"
 
 	core "github.com/authzed/spicedb/pkg/proto/core/v1"
 )
@@ -113,7 +112,7 @@ func Parse(relString string) (Relationship, error) {
 
 	subjectRelation := Ellipsis
 	if len(groups[subjectRelIndex]) > 0 {
-		subjectRelation = stringz.DefaultEmpty(groups[subjectRelIndex], Ellipsis)
+		subjectRelation = cmp.Or(groups[subjectRelIndex], Ellipsis)
 	}
 
 	caveatName := groups[caveatNameIndex]

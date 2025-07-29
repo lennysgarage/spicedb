@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
-
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
 
@@ -25,7 +24,7 @@ func (mc fakeQuerier) QueryRowFunc(ctx context.Context, rowFunc func(ctx context
 	return mc.err
 }
 
-func (mc fakeQuerier) ExecFunc(_ context.Context, _ func(ctx context.Context, tag pgconn.CommandTag, err error) error, _ string, _ ...interface{}) error {
+func (mc fakeQuerier) ExecFunc(_ context.Context, _ func(ctx context.Context, tag pgconn.CommandTag, err error) error, _ string, _ ...any) error {
 	return mc.err
 }
 
@@ -72,21 +71,21 @@ func TestStrictReaderDetectsLagErrors(t *testing.T) {
 
 			mc.err = received
 			reader.wrapped = mc
-			err := reader.ExecFunc(context.Background(), nil, "SELECT 1")
+			err := reader.ExecFunc(t.Context(), nil, "SELECT 1")
 			if expected != nil {
 				require.ErrorAs(t, err, &expected)
 			} else {
 				require.NoError(t, err)
 			}
 
-			err = reader.QueryFunc(context.Background(), nil, "SELECT 1")
+			err = reader.QueryFunc(t.Context(), nil, "SELECT 1")
 			if expected != nil {
 				require.ErrorAs(t, err, &expected)
 			} else {
 				require.NoError(t, err)
 			}
 
-			err = reader.QueryRowFunc(context.Background(), nil, "SELECT 1")
+			err = reader.QueryRowFunc(t.Context(), nil, "SELECT 1")
 			if expected != nil {
 				require.ErrorAs(t, err, &expected)
 			} else {

@@ -19,7 +19,7 @@ func RetryTest(t *testing.T, tester DatastoreTester) {
 		name                 string
 		returnRetryableError bool
 		txOptions            []options.RWTOptionsOption
-		countAssertion       func(require.TestingT, interface{}, ...interface{})
+		countAssertion       func(require.TestingT, any, ...any)
 	}{
 		{"retryable with retries", true, nil, require.Positive},
 		{"non-retryable with retries", false, nil, require.Zero},
@@ -43,7 +43,7 @@ func RetryTest(t *testing.T, tester DatastoreTester) {
 				}
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+			ctx, cancel := context.WithTimeout(t.Context(), 1500*time.Millisecond)
 			defer cancel()
 
 			var attempts int

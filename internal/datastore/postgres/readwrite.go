@@ -1,28 +1,26 @@
 package postgres
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"strings"
-
-	"github.com/ccoveille/go-safecast"
-
-	"github.com/authzed/spicedb/pkg/datastore/options"
-	"github.com/authzed/spicedb/pkg/genutil/mapz"
-	typedschema "github.com/authzed/spicedb/pkg/schema"
-	"github.com/authzed/spicedb/pkg/spiceerrors"
 
 	sq "github.com/Masterminds/squirrel"
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+	"github.com/ccoveille/go-safecast"
 	"github.com/jackc/pgx/v5"
-	"github.com/jzelinskie/stringz"
+
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 
 	"github.com/authzed/spicedb/internal/datastore/common"
 	pgxcommon "github.com/authzed/spicedb/internal/datastore/postgres/common"
 	"github.com/authzed/spicedb/internal/datastore/postgres/schema"
 	"github.com/authzed/spicedb/pkg/datastore"
+	"github.com/authzed/spicedb/pkg/datastore/options"
+	"github.com/authzed/spicedb/pkg/genutil/mapz"
 	core "github.com/authzed/spicedb/pkg/proto/core/v1"
+	typedschema "github.com/authzed/spicedb/pkg/schema"
+	"github.com/authzed/spicedb/pkg/spiceerrors"
 	"github.com/authzed/spicedb/pkg/tuple"
 )
 
@@ -94,7 +92,7 @@ func appendForInsertion(builder sq.InsertBuilder, tpl tuple.Relationship) sq.Ins
 		caveatContext = tpl.OptionalCaveat.Context.AsMap()
 	}
 
-	valuesToWrite := []interface{}{
+	valuesToWrite := []any{
 		tpl.Resource.ObjectType,
 		tpl.Resource.ObjectID,
 		tpl.Resource.Relation,
@@ -450,11 +448,11 @@ func (rwt *pgReadWriteTXN) deleteRelationshipsWithLimit(ctx context.Context, fil
 		query = query.Where(sq.Eq{schema.ColRelation: filter.OptionalRelation})
 	}
 	if filter.OptionalResourceIdPrefix != "" {
-		if strings.Contains(filter.OptionalResourceIdPrefix, "%") {
-			return 0, false, fmt.Errorf("unable to delete relationships with a prefix containing the %% character")
+		likeClause, err := common.BuildLikePrefixClause(schema.ColObjectID, filter.OptionalResourceIdPrefix)
+		if err != nil {
+			return 0, false, fmt.Errorf(errUnableToDeleteRelationships, err)
 		}
-
-		query = query.Where(sq.Like{schema.ColObjectID: filter.OptionalResourceIdPrefix + "%"})
+		query = query.Where(likeClause)
 	}
 
 	// Add clauses for the SubjectFilter
@@ -464,7 +462,7 @@ func (rwt *pgReadWriteTXN) deleteRelationshipsWithLimit(ctx context.Context, fil
 			query = query.Where(sq.Eq{schema.ColUsersetObjectID: subjectFilter.OptionalSubjectId})
 		}
 		if relationFilter := subjectFilter.OptionalRelation; relationFilter != nil {
-			query = query.Where(sq.Eq{schema.ColUsersetRelation: stringz.DefaultEmpty(relationFilter.Relation, datastore.Ellipsis)})
+			query = query.Where(sq.Eq{schema.ColUsersetRelation: cmp.Or(relationFilter.Relation, datastore.Ellipsis)})
 		}
 	}
 
@@ -519,11 +517,11 @@ func (rwt *pgReadWriteTXN) deleteRelationships(ctx context.Context, filter *v1.R
 		query = query.Where(sq.Eq{schema.ColRelation: filter.OptionalRelation})
 	}
 	if filter.OptionalResourceIdPrefix != "" {
-		if strings.Contains(filter.OptionalResourceIdPrefix, "%") {
-			return 0, fmt.Errorf("unable to delete relationships with a prefix containing the %% character")
+		likeClause, err := common.BuildLikePrefixClause(schema.ColObjectID, filter.OptionalResourceIdPrefix)
+		if err != nil {
+			return 0, fmt.Errorf(errUnableToDeleteRelationships, err)
 		}
-
-		query = query.Where(sq.Like{schema.ColObjectID: filter.OptionalResourceIdPrefix + "%"})
+		query = query.Where(likeClause)
 	}
 
 	// Add clauses for the SubjectFilter
@@ -533,7 +531,7 @@ func (rwt *pgReadWriteTXN) deleteRelationships(ctx context.Context, filter *v1.R
 			query = query.Where(sq.Eq{schema.ColUsersetObjectID: subjectFilter.OptionalSubjectId})
 		}
 		if relationFilter := subjectFilter.OptionalRelation; relationFilter != nil {
-			query = query.Where(sq.Eq{schema.ColUsersetRelation: stringz.DefaultEmpty(relationFilter.Relation, datastore.Ellipsis)})
+			query = query.Where(sq.Eq{schema.ColUsersetRelation: cmp.Or(relationFilter.Relation, datastore.Ellipsis)})
 		}
 	}
 
@@ -567,7 +565,7 @@ func (rwt *pgReadWriteTXN) WriteNamespaces(ctx context.Context, newConfigs ...*c
 
 		deletedNamespaceClause = append(deletedNamespaceClause, sq.Eq{schema.ColNamespace: newNamespace.Name})
 
-		valuesToWrite := []interface{}{newNamespace.Name, serialized}
+		valuesToWrite := []any{newNamespace.Name, serialized}
 
 		writeQuery = writeQuery.Values(valuesToWrite...)
 	}

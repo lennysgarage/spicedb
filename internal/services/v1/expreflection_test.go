@@ -5,10 +5,12 @@ import (
 	"strings"
 	"testing"
 
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/ettle/strcase"
 	"github.com/stretchr/testify/require"
 
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+
+	caveattypes "github.com/authzed/spicedb/pkg/caveats/types"
 	"github.com/authzed/spicedb/pkg/datastore/revisionparsing"
 	"github.com/authzed/spicedb/pkg/diff"
 	"github.com/authzed/spicedb/pkg/genutil/mapz"
@@ -541,7 +543,7 @@ func TestExpConvertDiff(t *testing.T) {
 			es := diff.NewDiffableSchemaFromCompiledSchema(existingSchema)
 			cs := diff.NewDiffableSchemaFromCompiledSchema(comparisonSchema)
 
-			diff, err := diff.DiffSchemas(es, cs)
+			diff, err := diff.DiffSchemas(es, cs, caveattypes.Default.TypeSet)
 			require.NoError(t, err)
 
 			resp, err := expConvertDiff(
@@ -549,6 +551,7 @@ func TestExpConvertDiff(t *testing.T) {
 				&es,
 				&cs,
 				revisionparsing.MustParseRevisionForTest("1"),
+				caveattypes.Default.TypeSet,
 			)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)

@@ -2,6 +2,7 @@ package schema
 
 import (
 	"github.com/authzed/spicedb/internal/datastore/common"
+	"github.com/authzed/spicedb/pkg/datastore"
 	"github.com/authzed/spicedb/pkg/datastore/queryshape"
 )
 
@@ -12,6 +13,8 @@ var IndexPrimaryKey = common.IndexDefinition{
 	Shapes: []queryshape.Shape{
 		queryshape.CheckPermissionSelectDirectSubjects,
 		queryshape.CheckPermissionSelectIndirectSubjects,
+		queryshape.FindResourceOfType,
+		queryshape.AllSubjectsForResources,
 	},
 }
 
@@ -20,8 +23,7 @@ var IndexRelationshipBySubject = common.IndexDefinition{
 	Name:       "ix_relation_tuple_by_subject",
 	ColumnsSQL: `relation_tuple (userset_object_id, userset_namespace, userset_relation, namespace, relation)`,
 	Shapes: []queryshape.Shape{
-		queryshape.CheckPermissionSelectDirectSubjects,
-		queryshape.CheckPermissionSelectIndirectSubjects,
+		queryshape.MatchingResourcesForSubject,
 	},
 }
 
@@ -42,9 +44,60 @@ var IndexRelationshipWithIntegrity = common.IndexDefinition{
 	},
 }
 
-var crdbIndexes = []common.IndexDefinition{
+var crdbAllIndexes = []common.IndexDefinition{
 	IndexPrimaryKey,
 	IndexRelationshipBySubject,
 	IndexRelationshipBySubjectRelation,
 	IndexRelationshipWithIntegrity,
+}
+
+var crdbWithoutIntegrityIndexes = []common.IndexDefinition{
+	IndexPrimaryKey,
+	IndexRelationshipBySubject,
+	IndexRelationshipBySubjectRelation,
+}
+
+// TODO: add new indexes to integrity to match the existing ones on non-integrity.
+var crdbWithIntegrityIndexes = []common.IndexDefinition{
+	IndexRelationshipWithIntegrity,
+}
+
+var NoIndexingHint common.IndexingHint = nil
+
+// IndexingHintForQueryShape returns an indexing hint for the given query shape, if any.
+func IndexingHintForQueryShape(schema common.SchemaInformation, qs queryshape.Shape) common.IndexingHint {
+	if schema.IntegrityEnabled {
+		// Don't force anything since we don't have the other indexes.
+		return NoIndexingHint
+	}
+
+	switch qs {
+	case queryshape.CheckPermissionSelectDirectSubjects:
+		return forcedIndex{IndexPrimaryKey}
+
+	case queryshape.CheckPermissionSelectIndirectSubjects:
+		return forcedIndex{IndexPrimaryKey}
+
+	case queryshape.AllSubjectsForResources:
+		return forcedIndex{IndexPrimaryKey}
+
+	case queryshape.MatchingResourcesForSubject:
+		return forcedIndex{IndexRelationshipBySubject}
+
+	case queryshape.FindResourceOfType:
+		return forcedIndex{IndexPrimaryKey}
+
+	default:
+		return nil
+	}
+}
+
+// IndexForFilter returns the index to use for a given relationships filter or nil if no index is forced.
+func IndexForFilter(schema common.SchemaInformation, filter datastore.RelationshipsFilter) (*common.IndexDefinition, error) {
+	indexesToCheck := crdbWithoutIntegrityIndexes
+	if schema.IntegrityEnabled {
+		indexesToCheck = crdbWithIntegrityIndexes
+	}
+
+	return forcedIndexForFilter(filter, indexesToCheck)
 }

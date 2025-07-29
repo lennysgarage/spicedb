@@ -1,15 +1,16 @@
 package v1
 
 import (
-	"context"
+	"maps"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/exp/maps"
+
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 
 	"github.com/authzed/spicedb/internal/graph/computed"
 	"github.com/authzed/spicedb/pkg/datastore"
@@ -200,11 +201,11 @@ func TestGroupItems(t *testing.T) {
 				maximumAPIDepth:      1,
 			}
 
-			ccpByHash, err := groupItems(context.Background(), cp, items)
+			ccpByHash, err := groupItems(t.Context(), cp, items)
 			if tt.err != "" {
 				require.ErrorContains(t, err, tt.err)
 			} else {
-				ccp := maps.Values(ccpByHash)
+				ccp := slices.Collect(maps.Values(ccpByHash))
 				require.NoError(t, err)
 				require.Equal(t, len(tt.groupings), len(ccp))
 
@@ -265,6 +266,6 @@ func TestCaveatContextSizeLimitIsEnforced(t *testing.T) {
 			Context:    rel.OptionalCaveat.Context,
 		},
 	}
-	_, err = groupItems(context.Background(), cp, items)
+	_, err = groupItems(t.Context(), cp, items)
 	require.ErrorContains(t, err, "request caveat context should have less than 1 bytes but had 14")
 }

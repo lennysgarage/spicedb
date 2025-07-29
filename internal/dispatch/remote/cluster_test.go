@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -38,7 +39,6 @@ type fakeDispatchSvc struct {
 	errorOnLR2    error
 	errorOnLS     error
 	errorOnCheck  error
-	raisePanic    bool
 }
 
 func (fds *fakeDispatchSvc) DispatchCheck(ctx context.Context, _ *v1.DispatchCheckRequest) (*v1.DispatchCheckResponse, error) {
@@ -53,9 +53,7 @@ func (fds *fakeDispatchSvc) DispatchCheck(ctx context.Context, _ *v1.DispatchChe
 		}, ctx.Err()
 
 	default:
-		if fds.raisePanic {
-			panic("panic raised")
-		}
+		// continue onward
 	}
 
 	if fds.errorOnCheck != nil {
@@ -161,7 +159,7 @@ func TestDispatchTimeout(t *testing.T) {
 			}()
 
 			conn, err := grpchelpers.DialAndWait(
-				context.Background(),
+				t.Context(),
 				"",
 				grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
 					return listener.Dial()
@@ -186,7 +184,7 @@ func TestDispatchTimeout(t *testing.T) {
 
 			// Invoke a dispatched "check" and ensure it times out, as the fake dispatch will wait
 			// longer than the configured timeout.
-			resp, err := dispatcher.DispatchCheck(context.Background(), &v1.DispatchCheckRequest{
+			resp, err := dispatcher.DispatchCheck(t.Context(), &v1.DispatchCheckRequest{
 				ResourceRelation: &corev1.RelationReference{Namespace: "sometype", Relation: "somerel"},
 				ResourceIds:      []string{"foo"},
 				Metadata:         &v1.ResolverMeta{DepthRemaining: 50},
@@ -194,7 +192,7 @@ func TestDispatchTimeout(t *testing.T) {
 			})
 			if tc.sleepTime > tc.timeout {
 				require.Error(t, err)
-				require.ErrorContains(t, err, "context deadline exceeded")
+				require.True(t, strings.Contains(err.Error(), "context deadline exceeded") || strings.Contains(err.Error(), "CANCEL"))
 			} else {
 				require.NoError(t, err)
 				require.NotNil(t, resp)
@@ -202,7 +200,7 @@ func TestDispatchTimeout(t *testing.T) {
 			}
 
 			// Invoke a dispatched "LookupSubjects" and test as well.
-			stream := dispatch.NewCollectingDispatchStream[*v1.DispatchLookupSubjectsResponse](context.Background())
+			stream := dispatch.NewCollectingDispatchStream[*v1.DispatchLookupSubjectsResponse](t.Context())
 			err = dispatcher.DispatchLookupSubjects(&v1.DispatchLookupSubjectsRequest{
 				ResourceRelation: &corev1.RelationReference{Namespace: "sometype", Relation: "somerel"},
 				ResourceIds:      []string{"foo"},
@@ -211,7 +209,7 @@ func TestDispatchTimeout(t *testing.T) {
 			}, stream)
 			if tc.sleepTime > tc.timeout {
 				require.Error(t, err)
-				require.ErrorContains(t, err, "context deadline exceeded")
+				require.True(t, strings.Contains(err.Error(), "context deadline exceeded") || strings.Contains(err.Error(), "CANCEL"))
 			} else {
 				require.NoError(t, err)
 				require.NotEmpty(t, stream.Results())
@@ -222,6 +220,8 @@ func TestDispatchTimeout(t *testing.T) {
 }
 
 func TestCheckSecondaryDispatch(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name             string
 		expr             string
@@ -318,14 +318,14 @@ func TestCheckSecondaryDispatch(t *testing.T) {
 				KeyHandler:             &keys.DirectKeyHandler{},
 				DispatchOverallTimeout: 30 * time.Second,
 			}, map[string]SecondaryDispatch{
-				"secondary": {Name: "secondary", Client: v1.NewDispatchServiceClient(secondaryConn)},
+				"secondary": {Name: "secondary", Client: v1.NewDispatchServiceClient(secondaryConn), MaximumPrimaryHedgingDelay: 5 * time.Millisecond},
 			}, map[string]*DispatchExpr{
 				"check": parsed,
 			}, 0*time.Second)
 			require.NoError(t, err)
 			require.True(t, dispatcher.ReadyState().IsReady)
 
-			resp, err := dispatcher.DispatchCheck(context.Background(), tc.request)
+			resp, err := dispatcher.DispatchCheck(t.Context(), tc.request)
 			require.NoError(t, err)
 			require.Equal(t, tc.expectedResult, resp.Metadata.DispatchCount)
 		})
@@ -586,16 +586,16 @@ func TestLRSecondaryDispatch(t *testing.T) {
 				KeyHandler:             &keys.DirectKeyHandler{},
 				DispatchOverallTimeout: 30 * time.Second,
 			}, map[string]SecondaryDispatch{
-				"secondary": {Name: "secondary", Client: v1.NewDispatchServiceClient(secondaryConn)},
-				"tertiary":  {Name: "tertiary", Client: v1.NewDispatchServiceClient(tertiaryConn)},
-				"error":     {Name: "error", Client: v1.NewDispatchServiceClient(errorConn)},
+				"secondary": {Name: "secondary", Client: v1.NewDispatchServiceClient(secondaryConn), MaximumPrimaryHedgingDelay: 5 * time.Millisecond},
+				"tertiary":  {Name: "tertiary", Client: v1.NewDispatchServiceClient(tertiaryConn), MaximumPrimaryHedgingDelay: 5 * time.Millisecond},
+				"error":     {Name: "error", Client: v1.NewDispatchServiceClient(errorConn), MaximumPrimaryHedgingDelay: 5 * time.Millisecond},
 			}, map[string]*DispatchExpr{
 				"lookupresources": parsed,
 			}, 0*time.Second)
 			require.NoError(t, err)
 			require.True(t, dispatcher.ReadyState().IsReady)
 
-			stream := dispatch.NewCollectingDispatchStream[*v1.DispatchLookupResources2Response](context.Background())
+			stream := dispatch.NewCollectingDispatchStream[*v1.DispatchLookupResources2Response](t.Context())
 			err = dispatcher.DispatchLookupResources2(tc.request, stream)
 
 			if tc.expectedError {
@@ -623,14 +623,14 @@ func TestLRDispatchFallbackToPrimary(t *testing.T) {
 		KeyHandler:             &keys.DirectKeyHandler{},
 		DispatchOverallTimeout: 30 * time.Second,
 	}, map[string]SecondaryDispatch{
-		"secondary": {Name: "secondary", Client: v1.NewDispatchServiceClient(secondaryConn)},
+		"secondary": {Name: "secondary", Client: v1.NewDispatchServiceClient(secondaryConn), MaximumPrimaryHedgingDelay: 5 * time.Millisecond},
 	}, map[string]*DispatchExpr{
 		"lookupresources": parsed,
 	}, 0*time.Second)
 	require.NoError(t, err)
 	require.True(t, dispatcher.ReadyState().IsReady)
 
-	stream := dispatch.NewCollectingDispatchStream[*v1.DispatchLookupResources2Response](context.Background())
+	stream := dispatch.NewCollectingDispatchStream[*v1.DispatchLookupResources2Response](t.Context())
 	err = dispatcher.DispatchLookupResources2(&v1.DispatchLookupResources2Request{
 		ResourceRelation: &corev1.RelationReference{
 			Namespace: "somenamespace",
@@ -714,16 +714,16 @@ func TestLSSecondaryDispatch(t *testing.T) {
 				KeyHandler:             &keys.DirectKeyHandler{},
 				DispatchOverallTimeout: 30 * time.Second,
 			}, map[string]SecondaryDispatch{
-				"secondary": {Name: "secondary", Client: v1.NewDispatchServiceClient(secondaryConn)},
-				"tertiary":  {Name: "tertiary", Client: v1.NewDispatchServiceClient(tertiaryConn)},
-				"error":     {Name: "error", Client: v1.NewDispatchServiceClient(errorConn)},
+				"secondary": {Name: "secondary", Client: v1.NewDispatchServiceClient(secondaryConn), MaximumPrimaryHedgingDelay: 5 * time.Millisecond},
+				"tertiary":  {Name: "tertiary", Client: v1.NewDispatchServiceClient(tertiaryConn), MaximumPrimaryHedgingDelay: 5 * time.Millisecond},
+				"error":     {Name: "error", Client: v1.NewDispatchServiceClient(errorConn), MaximumPrimaryHedgingDelay: 5 * time.Millisecond},
 			}, map[string]*DispatchExpr{
 				"lookupsubjects": parsed,
 			}, 0*time.Second)
 			require.NoError(t, err)
 			require.True(t, dispatcher.ReadyState().IsReady)
 
-			stream := dispatch.NewCollectingDispatchStream[*v1.DispatchLookupSubjectsResponse](context.Background())
+			stream := dispatch.NewCollectingDispatchStream[*v1.DispatchLookupSubjectsResponse](t.Context())
 			err = dispatcher.DispatchLookupSubjects(tc.request, stream)
 
 			if tc.expectedError {
@@ -751,14 +751,14 @@ func TestLSDispatchFallbackToPrimary(t *testing.T) {
 		KeyHandler:             &keys.DirectKeyHandler{},
 		DispatchOverallTimeout: 30 * time.Second,
 	}, map[string]SecondaryDispatch{
-		"secondary": {Name: "secondary", Client: v1.NewDispatchServiceClient(secondaryConn)},
+		"secondary": {Name: "secondary", Client: v1.NewDispatchServiceClient(secondaryConn), MaximumPrimaryHedgingDelay: 5 * time.Millisecond},
 	}, map[string]*DispatchExpr{
 		"lookupsubjects": parsed,
 	}, 0*time.Second)
 	require.NoError(t, err)
 	require.True(t, dispatcher.ReadyState().IsReady)
 
-	stream := dispatch.NewCollectingDispatchStream[*v1.DispatchLookupSubjectsResponse](context.Background())
+	stream := dispatch.NewCollectingDispatchStream[*v1.DispatchLookupSubjectsResponse](t.Context())
 	err = dispatcher.DispatchLookupSubjects(&v1.DispatchLookupSubjectsRequest{
 		ResourceRelation: &corev1.RelationReference{
 			Namespace: "somenamespace",
@@ -779,7 +779,7 @@ func TestLSDispatchFallbackToPrimary(t *testing.T) {
 }
 
 func TestCheckUsesDelayByDefaultForPrimary(t *testing.T) {
-	conn := connectionForDispatching(t, &fakeDispatchSvc{dispatchCount: 1, sleepTime: 3 * time.Millisecond, raisePanic: true})
+	conn := connectionForDispatching(t, &fakeDispatchSvc{dispatchCount: 1, sleepTime: 3 * time.Millisecond})
 	secondaryConn := connectionForDispatching(t, &fakeDispatchSvc{dispatchCount: 2, sleepTime: 3 * time.Millisecond})
 
 	parsed, err := ParseDispatchExpression("check", "['secondary']")
@@ -789,16 +789,16 @@ func TestCheckUsesDelayByDefaultForPrimary(t *testing.T) {
 		KeyHandler:             &keys.DirectKeyHandler{},
 		DispatchOverallTimeout: 30 * time.Second,
 	}, map[string]SecondaryDispatch{
-		"secondary": {Name: "secondary", Client: v1.NewDispatchServiceClient(secondaryConn)},
+		"secondary": {Name: "secondary", Client: v1.NewDispatchServiceClient(secondaryConn), MaximumPrimaryHedgingDelay: 15 * time.Millisecond},
 	}, map[string]*DispatchExpr{
 		"check": parsed,
-	}, 0*time.Second)
+	}, 10*time.Millisecond)
 	require.NoError(t, err)
 	require.True(t, dispatcher.ReadyState().IsReady)
 
 	// Dispatch the check, which should (since it is the first request) add a delay of ~5ms to
 	// the primary, thus ensuring the secondary is used without any timeout for either,.
-	resp, err := dispatcher.DispatchCheck(context.Background(), &v1.DispatchCheckRequest{
+	resp, err := dispatcher.DispatchCheck(t.Context(), &v1.DispatchCheckRequest{
 		ResourceRelation: &corev1.RelationReference{Namespace: "sometype", Relation: "somerel"},
 		ResourceIds:      []string{"foo"},
 		Metadata:         &v1.ResolverMeta{DepthRemaining: 50},
@@ -824,16 +824,16 @@ func TestStreamingDispatchDelayByDefaultForPrimary(t *testing.T) {
 		KeyHandler:             &keys.DirectKeyHandler{},
 		DispatchOverallTimeout: 30 * time.Second,
 	}, map[string]SecondaryDispatch{
-		"secondary": {Name: "secondary", Client: v1.NewDispatchServiceClient(secondaryConn)},
+		"secondary": {Name: "secondary", Client: v1.NewDispatchServiceClient(secondaryConn), MaximumPrimaryHedgingDelay: 15 * time.Millisecond},
 	}, map[string]*DispatchExpr{
 		"lookupsubjects": parsed,
-	}, 0*time.Second)
+	}, 10*time.Second)
 	require.NoError(t, err)
 	require.True(t, dispatcher.ReadyState().IsReady)
 
-	// Dispatch the lookupsubjects, which should (since it is the first request) add a delay of ~5ms to
+	// Dispatch the lookupsubjects, which should (since it is the first request) add a delay of ~10ms to
 	// the primary, thus ensuring the secondary is used without any timeout for either,.
-	stream := dispatch.NewCollectingDispatchStream[*v1.DispatchLookupSubjectsResponse](context.Background())
+	stream := dispatch.NewCollectingDispatchStream[*v1.DispatchLookupSubjectsResponse](t.Context())
 	err = dispatcher.DispatchLookupSubjects(&v1.DispatchLookupSubjectsRequest{
 		ResourceRelation: &corev1.RelationReference{
 			Namespace: "somenamespace",
@@ -868,7 +868,7 @@ func TestGetPrimaryWaitTime(t *testing.T) {
 		KeyHandler:             &keys.DirectKeyHandler{},
 		DispatchOverallTimeout: 30 * time.Second,
 	}, map[string]SecondaryDispatch{
-		"secondary": {Name: "secondary", Client: v1.NewDispatchServiceClient(secondaryConn)},
+		"secondary": {Name: "secondary", Client: v1.NewDispatchServiceClient(secondaryConn), MaximumPrimaryHedgingDelay: 5 * time.Millisecond},
 	}, map[string]*DispatchExpr{
 		"check": parsed,
 	}, 0*time.Second)
@@ -883,22 +883,52 @@ func TestGetPrimaryWaitTime(t *testing.T) {
 	}
 
 	// Ensure the primary wait time is ~=2ms.
-	require.GreaterOrEqual(t, dispatcher.getPrimaryWaitTime("check", tuple.RR("document", "viewer"), tuple.RR("user", "...")), 2*time.Millisecond)
+	require.GreaterOrEqual(t, dispatcher.getPrimaryWaitTime("check", tuple.RR("document", "viewer"), tuple.RR("user", "..."), 10*time.Millisecond), 2*time.Millisecond)
 
 	// Mark document#viewer as unsupported.
 	dispatcher.supportedResourceSubjectTracker.updateForError(testResourceRelationError{fmt.Errorf("foo"), "document", "viewer"})
 
 	// Ensure the primary wait time for document#viewer is now 0ms.
-	require.Equal(t, 0*time.Millisecond, dispatcher.getPrimaryWaitTime("check", tuple.RR("document", "viewer"), tuple.RR("user", "...")))
+	require.Equal(t, 0*time.Millisecond, dispatcher.getPrimaryWaitTime("check", tuple.RR("document", "viewer"), tuple.RR("user", "..."), 10*time.Millisecond))
 
 	// Ensure the primary wait time for document#editor is still ~=2ms.
-	require.GreaterOrEqual(t, dispatcher.getPrimaryWaitTime("check", tuple.RR("document", "editor"), tuple.RR("user", "...")), 2*time.Millisecond)
+	require.GreaterOrEqual(t, dispatcher.getPrimaryWaitTime("check", tuple.RR("document", "editor"), tuple.RR("user", "..."), 10*time.Millisecond), 2*time.Millisecond)
 
 	// Mark document#viewer as supported again.
 	dispatcher.supportedResourceSubjectTracker.updateForSuccess(tuple.RR("document", "viewer"), tuple.RR("user", "..."))
 
 	// Ensure the primary wait time for document#viewer is now ~=2ms.
-	require.GreaterOrEqual(t, dispatcher.getPrimaryWaitTime("check", tuple.RR("document", "viewer"), tuple.RR("user", "...")), 2*time.Millisecond)
+	require.GreaterOrEqual(t, dispatcher.getPrimaryWaitTime("check", tuple.RR("document", "viewer"), tuple.RR("user", "..."), 10*time.Millisecond), 2*time.Millisecond)
+}
+
+func TestCheckUsesMaximumDelayByDefaultForPrimary(t *testing.T) {
+	conn := connectionForDispatching(t, &fakeDispatchSvc{dispatchCount: 1, sleepTime: 0 * time.Millisecond})
+	secondaryConn := connectionForDispatching(t, &fakeDispatchSvc{dispatchCount: 2, sleepTime: 20 * time.Millisecond})
+
+	parsed, err := ParseDispatchExpression("check", "['secondary']")
+	require.NoError(t, err)
+
+	dispatcher, err := NewClusterDispatcher(v1.NewDispatchServiceClient(conn), conn, ClusterDispatcherConfig{
+		KeyHandler:             &keys.DirectKeyHandler{},
+		DispatchOverallTimeout: 30 * time.Second,
+	}, map[string]SecondaryDispatch{
+		"secondary": {Name: "secondary", Client: v1.NewDispatchServiceClient(secondaryConn), MaximumPrimaryHedgingDelay: 0 * time.Millisecond},
+	}, map[string]*DispatchExpr{
+		"check": parsed,
+	}, 0*time.Second)
+	require.NoError(t, err)
+	require.True(t, dispatcher.ReadyState().IsReady)
+
+	// Dispatch the check, which should (since it is the first request) add a delay of ~5ms (except the max is 0ms),
+	// thus ensuring the primary is used.
+	resp, err := dispatcher.DispatchCheck(t.Context(), &v1.DispatchCheckRequest{
+		ResourceRelation: &corev1.RelationReference{Namespace: "sometype", Relation: "somerel"},
+		ResourceIds:      []string{"foo"},
+		Metadata:         &v1.ResolverMeta{DepthRemaining: 50},
+		Subject:          &corev1.ObjectAndRelation{Namespace: "foo", ObjectId: "bar", Relation: "..."},
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), resp.Metadata.DispatchCount)
 }
 
 func connectionForDispatching(t *testing.T, svc v1.DispatchServiceServer) *grpc.ClientConn {
@@ -913,7 +943,7 @@ func connectionForDispatching(t *testing.T, svc v1.DispatchServiceServer) *grpc.
 	}()
 
 	conn, err := grpchelpers.DialAndWait(
-		context.Background(),
+		t.Context(),
 		"",
 		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
 			return listener.Dial()
@@ -1018,26 +1048,23 @@ func TestCheckToUnsupportedRemovesHedgingDelay(t *testing.T) {
 		KeyHandler:             &keys.DirectKeyHandler{},
 		DispatchOverallTimeout: 30 * time.Second,
 	}, map[string]SecondaryDispatch{
-		"secondary": {Name: "secondary", Client: v1.NewDispatchServiceClient(secondaryConn)},
+		"secondary": {Name: "secondary", Client: v1.NewDispatchServiceClient(secondaryConn), MaximumPrimaryHedgingDelay: 5 * time.Millisecond},
 	}, map[string]*DispatchExpr{
 		"check": parsed,
 	}, 25*time.Millisecond) // NOTE: We use 25ms to reduce the risk of flakiness
 	require.NoError(t, err)
 	require.True(t, dispatcher.ReadyState().IsReady)
 
-	// Dispatch the check, which should (since it is the first request) add a delay of ~25ms to
+	// Dispatch the check, which should (since it is the first request) add a delay of at most ~25ms to
 	// the primary, but fallback to the primary on the error.
-	startTime := time.Now()
-	resp, err := dispatcher.DispatchCheck(context.Background(), &v1.DispatchCheckRequest{
+	resp, err := dispatcher.DispatchCheck(t.Context(), &v1.DispatchCheckRequest{
 		ResourceRelation: &corev1.RelationReference{Namespace: "sometype", Relation: "somerel"},
 		ResourceIds:      []string{"foo"},
 		Metadata:         &v1.ResolverMeta{DepthRemaining: 50},
 		Subject:          &corev1.ObjectAndRelation{Namespace: "foo", ObjectId: "bar", Relation: "..."},
 	})
-	endTime := time.Now()
 	require.NoError(t, err)
 	require.Equal(t, uint32(1), resp.Metadata.DispatchCount)
-	require.GreaterOrEqual(t, endTime.Sub(startTime), 25*time.Millisecond)
 
 	// Ensure the resource relation was marked as unsupported.
 	cast := dispatcher.(*clusterDispatcher)
@@ -1045,14 +1072,14 @@ func TestCheckToUnsupportedRemovesHedgingDelay(t *testing.T) {
 	require.False(t, cast.supportedResourceSubjectTracker.isUnsupported(tuple.RR("someothertype", "somerel"), tuple.RR("foo", "bar")))
 
 	// Dispatch again, which should hit the primary without any delay.
-	startTime = time.Now()
-	resp, err = dispatcher.DispatchCheck(context.Background(), &v1.DispatchCheckRequest{
+	startTime := time.Now()
+	resp, err = dispatcher.DispatchCheck(t.Context(), &v1.DispatchCheckRequest{
 		ResourceRelation: &corev1.RelationReference{Namespace: "sometype", Relation: "somerel"},
 		ResourceIds:      []string{"foo"},
 		Metadata:         &v1.ResolverMeta{DepthRemaining: 50},
 		Subject:          &corev1.ObjectAndRelation{Namespace: "foo", ObjectId: "bar", Relation: "..."},
 	})
-	endTime = time.Now()
+	endTime := time.Now()
 	require.NoError(t, err)
 	require.Equal(t, uint32(1), resp.Metadata.DispatchCount)
 	require.LessOrEqual(t, endTime.Sub(startTime), 25*time.Millisecond)
@@ -1116,13 +1143,13 @@ func TestDALCount(t *testing.T) {
 
 		dal.addResultTime(3 * time.Millisecond)
 		require.Equal(t, uintValue, dal.digest.Count())
-		require.Equal(t, dal.startingPrimaryHedgingDelay, dal.getWaitTime())
+		require.Equal(t, dal.startingPrimaryHedgingDelay, dal.getWaitTime(10*time.Millisecond))
 	}
 
 	// Add the next result, which pushes it over the minimum count and now uses the quantile.
 	dal.addResultTime(3 * time.Millisecond)
 	require.Equal(t, uint64(minimumDigestCount), dal.digest.Count())
-	require.Equal(t, 3*time.Millisecond, dal.getWaitTime())
+	require.Equal(t, 3*time.Millisecond, dal.getWaitTime(10*time.Millisecond))
 }
 
 func BenchmarkDAL(b *testing.B) {

@@ -3,9 +3,10 @@ package proxy_test
 import (
 	"context"
 
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/ccoveille/go-safecast"
 	"github.com/stretchr/testify/mock"
+
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 
 	"github.com/authzed/spicedb/pkg/datastore"
 	"github.com/authzed/spicedb/pkg/datastore/options"
@@ -124,7 +125,7 @@ func (dm *MockReader) QueryRelationships(
 	filter datastore.RelationshipsFilter,
 	options ...options.QueryOptionsOption,
 ) (datastore.RelationshipIterator, error) {
-	callArgs := make([]interface{}, 0, len(options)+1)
+	callArgs := make([]any, 0, len(options)+1)
 	callArgs = append(callArgs, filter)
 	for _, option := range options {
 		callArgs = append(callArgs, option)
@@ -144,7 +145,7 @@ func (dm *MockReader) ReverseQueryRelationships(
 	subjectsFilter datastore.SubjectsFilter,
 	options ...options.ReverseQueryOptionsOption,
 ) (datastore.RelationshipIterator, error) {
-	callArgs := make([]interface{}, 0, len(options)+1)
+	callArgs := make([]any, 0, len(options)+1)
 	callArgs = append(callArgs, subjectsFilter)
 	for _, option := range options {
 		callArgs = append(callArgs, option)
@@ -223,7 +224,7 @@ func (dm *MockReadWriteTransaction) QueryRelationships(
 	filter datastore.RelationshipsFilter,
 	options ...options.QueryOptionsOption,
 ) (datastore.RelationshipIterator, error) {
-	callArgs := make([]interface{}, 0, len(options)+1)
+	callArgs := make([]any, 0, len(options)+1)
 	callArgs = append(callArgs, filter)
 	for _, option := range options {
 		callArgs = append(callArgs, option)
@@ -243,7 +244,7 @@ func (dm *MockReadWriteTransaction) ReverseQueryRelationships(
 	subjectsFilter datastore.SubjectsFilter,
 	options ...options.ReverseQueryOptionsOption,
 ) (datastore.RelationshipIterator, error) {
-	callArgs := make([]interface{}, 0, len(options)+1)
+	callArgs := make([]any, 0, len(options)+1)
 	callArgs = append(callArgs, subjectsFilter)
 	for _, option := range options {
 		callArgs = append(callArgs, option)

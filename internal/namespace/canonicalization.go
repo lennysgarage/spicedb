@@ -4,13 +4,12 @@ import (
 	"encoding/hex"
 	"hash/fnv"
 
-	"github.com/authzed/spicedb/pkg/schema"
-	"github.com/authzed/spicedb/pkg/spiceerrors"
-
 	"github.com/dalzilio/rudd"
 
 	"github.com/authzed/spicedb/pkg/graph"
 	core "github.com/authzed/spicedb/pkg/proto/core/v1"
+	"github.com/authzed/spicedb/pkg/schema"
+	"github.com/authzed/spicedb/pkg/spiceerrors"
 )
 
 const computedKeyPrefix = "%"
@@ -244,7 +243,7 @@ func buildBddVarMap(relations []*core.Relation, aliasMap map[string]string) (bdd
 			continue
 		}
 
-		_, err := graph.WalkRewrite(rewrite, func(childOneof *core.SetOperation_Child) (interface{}, error) {
+		_, err := graph.WalkRewrite(rewrite, func(childOneof *core.SetOperation_Child) (any, error) {
 			switch child := childOneof.ChildType.(type) {
 			case *core.SetOperation_Child_TupleToUserset:
 				key := child.TupleToUserset.Tupleset.Relation + "->" + child.TupleToUserset.ComputedUserset.Relation

@@ -3,12 +3,12 @@ package relationships
 import (
 	"context"
 
-	"github.com/samber/lo"
-
 	"github.com/authzed/spicedb/internal/namespace"
 	"github.com/authzed/spicedb/pkg/caveats"
+	caveattypes "github.com/authzed/spicedb/pkg/caveats/types"
 	"github.com/authzed/spicedb/pkg/datastore"
 	"github.com/authzed/spicedb/pkg/genutil/mapz"
+	"github.com/authzed/spicedb/pkg/genutil/slicez"
 	ns "github.com/authzed/spicedb/pkg/namespace"
 	core "github.com/authzed/spicedb/pkg/proto/core/v1"
 	"github.com/authzed/spicedb/pkg/schema"
@@ -21,9 +21,10 @@ import (
 func ValidateRelationshipUpdates(
 	ctx context.Context,
 	reader datastore.Reader,
+	caveatTypeSet *caveattypes.TypeSet,
 	updates []tuple.RelationshipUpdate,
 ) error {
-	rels := lo.Map(updates, func(item tuple.RelationshipUpdate, _ int) tuple.Relationship {
+	rels := slicez.Map(updates, func(item tuple.RelationshipUpdate) tuple.Relationship {
 		return item.Relationship
 	})
 
@@ -43,6 +44,7 @@ func ValidateRelationshipUpdates(
 		if err := ValidateOneRelationship(
 			referencedNamespaceMap,
 			referencedCaveatMap,
+			caveatTypeSet,
 			update.Relationship,
 			option,
 		); err != nil {
@@ -60,6 +62,7 @@ func ValidateRelationshipUpdates(
 func ValidateRelationshipsForCreateOrTouch(
 	ctx context.Context,
 	reader datastore.Reader,
+	caveatTypeSet *caveattypes.TypeSet,
 	rels ...tuple.Relationship,
 ) error {
 	// Load namespaces and caveats.
@@ -73,6 +76,7 @@ func ValidateRelationshipsForCreateOrTouch(
 		if err := ValidateOneRelationship(
 			referencedNamespaceMap,
 			referencedCaveatMap,
+			caveatTypeSet,
 			rel,
 			ValidateRelationshipForCreateOrTouch,
 		); err != nil {
@@ -144,6 +148,7 @@ const (
 func ValidateOneRelationship(
 	namespaceMap map[string]*schema.Definition,
 	caveatMap map[string]*core.CaveatDefinition,
+	caveatTypeSet *caveattypes.TypeSet,
 	rel tuple.Relationship,
 	rule ValidationRelationshipRule,
 ) error {
@@ -253,6 +258,7 @@ func ValidateOneRelationship(
 
 		// Verify that the provided context information matches the types of the parameters defined.
 		_, err := caveats.ConvertContextToParameters(
+			caveatTypeSet,
 			rel.OptionalCaveat.Context.AsMap(),
 			caveat.ParameterTypes,
 			caveats.ErrorForUnknownParameters,

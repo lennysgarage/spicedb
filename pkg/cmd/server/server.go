@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -9,12 +10,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/authzed/consistent"
-	"github.com/authzed/grpcutil"
 	"github.com/cespare/xxhash/v2"
 	"github.com/ecordell/optgen/helpers"
 	grpc_auth "github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/auth"
-	"github.com/hashicorp/go-multierror"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/cors"
 	"github.com/rs/zerolog"
@@ -23,6 +21,9 @@ import (
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	_ "google.golang.org/grpc/encoding/gzip" // enable gzip compression on all derivative servers
+
+	"github.com/authzed/consistent"
+	"github.com/authzed/grpcutil"
 
 	"github.com/authzed/spicedb/internal/auth"
 	"github.com/authzed/spicedb/internal/datastore/proxy"
@@ -101,9 +102,10 @@ type Config struct {
 	DispatchHashringSpread            uint8                   `debugmap:"visible"`
 	DispatchChunkSize                 uint16                  `debugmap:"visible" default:"100"`
 
-	DispatchSecondaryUpstreamAddrs map[string]string `debugmap:"visible"`
-	DispatchSecondaryUpstreamExprs map[string]string `debugmap:"visible"`
-	DispatchPrimaryDelayForTesting time.Duration     `debugmap:"hidden"`
+	DispatchSecondaryUpstreamAddrs               map[string]string `debugmap:"visible"`
+	DispatchSecondaryUpstreamExprs               map[string]string `debugmap:"visible"`
+	DispatchSecondaryMaximumPrimaryHedgingDelays map[string]string `debugmap:"visible"`
+	DispatchPrimaryDelayForTesting               time.Duration     `debugmap:"hidden"`
 
 	DispatchCacheConfig        CacheConfig `debugmap:"visible"`
 	ClusterDispatchCacheConfig CacheConfig `debugmap:"visible"`
@@ -123,6 +125,7 @@ type Config struct {
 	EnableExperimentalLookupResources        bool          `debugmap:"visible"`
 	EnableExperimentalRelationshipExpiration bool          `debugmap:"visible"`
 	EnableRevisionHeartbeat                  bool          `debugmap:"visible"`
+	EnablePerformanceInsightMetrics          bool          `debugmap:"visible"`
 
 	// Additional Services
 	MetricsAPI util.HTTPServerConfig `debugmap:"visible"`
@@ -175,7 +178,7 @@ func (c *closeableStack) Close() error {
 	// closer in reverse order how it's expected in deferred funcs
 	for i := len(c.closers) - 1; i >= 0; i-- {
 		if closerErr := c.closers[i](); closerErr != nil {
-			err = multierror.Append(err, closerErr)
+			err = errors.Join(err, closerErr)
 		}
 	}
 	return err
@@ -290,6 +293,7 @@ func (c *Config) Complete(ctx context.Context) (RunnableServer, error) {
 			combineddispatch.UpstreamCAPath(c.DispatchUpstreamCAPath),
 			combineddispatch.SecondaryUpstreamAddrs(c.DispatchSecondaryUpstreamAddrs),
 			combineddispatch.SecondaryUpstreamExprs(c.DispatchSecondaryUpstreamExprs),
+			combineddispatch.SecondaryMaximumPrimaryHedgingDelays(c.DispatchSecondaryMaximumPrimaryHedgingDelays),
 			combineddispatch.GrpcPresharedKey(dispatchPresharedKey),
 			combineddispatch.GrpcDialOpts(
 				grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
@@ -430,20 +434,29 @@ func (c *Config) Complete(ctx context.Context) (RunnableServer, error) {
 		return nil, fmt.Errorf("error building streaming middlewares: %w", err)
 	}
 
+	// NOTE: Preconditions are disabled if the isolation level is relaxed, as we cannot
+	// ensure the transactional guarantees of preconditions in that case.
+	maxPreconditionCount := c.MaximumPreconditionCount
+	if c.DatastoreConfig.RelaxedIsolationLevel {
+		maxPreconditionCount = 0
+	}
+
 	permSysConfig := v1svc.PermissionsServerConfig{
-		MaxPreconditionsCount:           c.MaximumPreconditionCount,
-		MaxUpdatesPerWrite:              c.MaximumUpdatesPerWrite,
-		MaximumAPIDepth:                 c.DispatchMaxDepth,
-		MaxCaveatContextSize:            c.MaxCaveatContextSize,
-		MaxRelationshipContextSize:      c.MaxRelationshipContextSize,
-		MaxDatastoreReadPageSize:        c.MaxDatastoreReadPageSize,
-		StreamingAPITimeout:             c.StreamingAPITimeout,
-		MaxReadRelationshipsLimit:       c.MaxReadRelationshipsLimit,
-		MaxDeleteRelationshipsLimit:     c.MaxDeleteRelationshipsLimit,
-		MaxLookupResourcesLimit:         c.MaxLookupResourcesLimit,
-		MaxBulkExportRelationshipsLimit: c.MaxBulkExportRelationshipsLimit,
-		DispatchChunkSize:               c.DispatchChunkSize,
-		ExpiringRelationshipsEnabled:    c.EnableExperimentalRelationshipExpiration,
+		MaxPreconditionsCount:            maxPreconditionCount,
+		MaxUpdatesPerWrite:               c.MaximumUpdatesPerWrite,
+		MaximumAPIDepth:                  c.DispatchMaxDepth,
+		MaxCaveatContextSize:             c.MaxCaveatContextSize,
+		MaxRelationshipContextSize:       c.MaxRelationshipContextSize,
+		MaxDatastoreReadPageSize:         c.MaxDatastoreReadPageSize,
+		StreamingAPITimeout:              c.StreamingAPITimeout,
+		MaxReadRelationshipsLimit:        c.MaxReadRelationshipsLimit,
+		MaxDeleteRelationshipsLimit:      c.MaxDeleteRelationshipsLimit,
+		MaxLookupResourcesLimit:          c.MaxLookupResourcesLimit,
+		MaxBulkExportRelationshipsLimit:  c.MaxBulkExportRelationshipsLimit,
+		DispatchChunkSize:                c.DispatchChunkSize,
+		ExpiringRelationshipsEnabled:     c.EnableExperimentalRelationshipExpiration,
+		CaveatTypeSet:                    c.DatastoreConfig.CaveatTypeSet,
+		PerformanceInsightMetricsEnabled: c.EnablePerformanceInsightMetrics,
 	}
 
 	healthManager := health.NewHealthManager(dispatcher, ds)

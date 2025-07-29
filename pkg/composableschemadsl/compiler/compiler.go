@@ -5,12 +5,13 @@ import (
 	"fmt"
 
 	"google.golang.org/protobuf/proto"
-	"k8s.io/utils/strings/slices"
 
+	caveattypes "github.com/authzed/spicedb/pkg/caveats/types"
 	"github.com/authzed/spicedb/pkg/composableschemadsl/dslshape"
 	"github.com/authzed/spicedb/pkg/composableschemadsl/input"
 	"github.com/authzed/spicedb/pkg/composableschemadsl/parser"
 	"github.com/authzed/spicedb/pkg/genutil/mapz"
+	"github.com/authzed/spicedb/pkg/genutil/slicez"
 	core "github.com/authzed/spicedb/pkg/proto/core/v1"
 )
 
@@ -55,6 +56,8 @@ type config struct {
 	skipValidation   bool
 	objectTypePrefix *string
 	allowedFlags     []string
+	caveatTypeSet    *caveattypes.TypeSet
+
 	// In an import context, this is the folder containing
 	// the importing schema (as opposed to imported schemas)
 	sourceFolder string
@@ -78,11 +81,16 @@ func AllowUnprefixedObjectType() ObjectPrefixOption {
 	return func(cfg *config) { cfg.objectTypePrefix = new(string) }
 }
 
+// WithCaveatTypeSet sets the caveat type set to use for the compilation.
+func WithCaveatTypeSet(caveatTypeSet *caveattypes.TypeSet) Option {
+	return func(cfg *config) { cfg.caveatTypeSet = caveatTypeSet }
+}
+
 const expirationFlag = "expiration"
 
 func DisallowExpirationFlag() Option {
 	return func(cfg *config) {
-		cfg.allowedFlags = slices.Filter([]string{}, cfg.allowedFlags, func(s string) bool {
+		cfg.allowedFlags = slicez.Filter(cfg.allowedFlags, func(s string) bool {
 			return s != expirationFlag
 		})
 	}
@@ -131,7 +139,7 @@ func Compile(schema InputSchema, prefix ObjectPrefixOption, opts ...Option) (*Co
 	}
 
 	initialCompiledPartials := make(map[string][]*core.Relation)
-
+	caveatTypeSet := caveattypes.TypeSetOrDefault(cfg.caveatTypeSet)
 	compiled, err := translate(&translationContext{
 		objectTypePrefix:   cfg.objectTypePrefix,
 		mapper:             mapper,
@@ -141,11 +149,12 @@ func Compile(schema InputSchema, prefix ObjectPrefixOption, opts ...Option) (*Co
 		existingNames:      mapz.NewSet[string](),
 		compiledPartials:   initialCompiledPartials,
 		unresolvedPartials: mapz.NewMultiMap[string, *dslNode](),
+		caveatTypeSet:      caveatTypeSet,
 	}, root)
 	if err != nil {
 		var withNodeError withNodeError
 		if errors.As(err, &withNodeError) {
-			err = toContextError(withNodeError.error.Error(), withNodeError.errorSourceCode, withNodeError.node, mapper)
+			err = toContextError(withNodeError.Error(), withNodeError.errorSourceCode, withNodeError.node, mapper)
 		}
 
 		return nil, err

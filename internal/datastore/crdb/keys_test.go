@@ -2,20 +2,22 @@ package crdb
 
 import (
 	"context"
+	"maps"
 	"net"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 
-	"github.com/authzed/authzed-go/pkg/requestmeta"
 	"github.com/dustin/go-humanize"
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/testing/testpb"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/exp/maps"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/test/bufconn"
+
+	"github.com/authzed/authzed-go/pkg/requestmeta"
 
 	"github.com/authzed/spicedb/internal/grpchelpers"
 )
@@ -60,7 +62,7 @@ func TestOverlapKeyAddition(t *testing.T) {
 	for _, tt := range cases {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			set := newKeySet(context.Background())
+			set := newKeySet(t.Context())
 			for _, n := range tt.namespaces {
 				tt.keyer.addKey(set, n)
 			}
@@ -74,7 +76,7 @@ type testServer struct {
 }
 
 func (t testServer) Ping(ctx context.Context, _ *testpb.PingRequest) (*testpb.PingResponse, error) {
-	keys := maps.Keys(overlapKeysFromContext(ctx))
+	keys := slices.Collect(maps.Keys(overlapKeysFromContext(ctx)))
 	sort.Strings(keys)
 	return &testpb.PingResponse{Value: strings.Join(keys, ",")}, nil
 }
@@ -142,7 +144,7 @@ func TestOverlapKeysFromContext(t *testing.T) {
 		}()
 
 		conn, err := grpchelpers.DialAndWait(
-			context.Background(),
+			t.Context(),
 			"",
 			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
 				return listener.Dial()
@@ -164,7 +166,7 @@ func TestOverlapKeysFromContext(t *testing.T) {
 				part := metadata.New(h)
 				md = metadata.Join(md, part)
 			}
-			ctx := metadata.NewOutgoingContext(context.Background(), md)
+			ctx := metadata.NewOutgoingContext(t.Context(), md)
 			resp, err := client.Ping(ctx, &testpb.PingRequest{})
 			require.NoError(t, err)
 			require.Equal(t, tt.expected, resp.Value)

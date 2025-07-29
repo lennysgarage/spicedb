@@ -19,6 +19,7 @@ import (
 	"github.com/authzed/spicedb/internal/datastore/proxy"
 	"github.com/authzed/spicedb/internal/datastore/spanner"
 	log "github.com/authzed/spicedb/internal/logging"
+	caveattypes "github.com/authzed/spicedb/pkg/caveats/types"
 	"github.com/authzed/spicedb/pkg/datastore"
 	"github.com/authzed/spicedb/pkg/validationfile"
 )
@@ -84,7 +85,7 @@ func RegisterConnPoolFlagsWithPrefix(flagSet *pflag.FlagSet, prefix string, defa
 	flagSet.IntVar(&opts.MaxOpenConns, flagName("max-open"), defaults.MaxOpenConns, "number of concurrent connections open in a remote datastore's connection pool")
 	flagSet.IntVar(&opts.MinOpenConns, flagName("min-open"), defaults.MinOpenConns, "number of minimum concurrent connections open in a remote datastore's connection pool")
 	flagSet.DurationVar(&opts.MaxLifetime, flagName("max-lifetime"), defaults.MaxLifetime, "maximum amount of time a connection can live in a remote datastore's connection pool")
-	flagSet.DurationVar(&opts.MaxLifetimeJitter, flagName("max-lifetime-jitter"), defaults.MaxLifetimeJitter, "waits rand(0, jitter) after a connection is open for max lifetime to actually close the connection (default: 20% of max lifetime)")
+	flagSet.DurationVar(&opts.MaxLifetimeJitter, flagName("max-lifetime-jitter"), defaults.MaxLifetimeJitter, "waits rand(0, jitter) after a connection is open for max lifetime to actually close the connection (default: 20% of max lifetime, 30m for CockroachDB)")
 	flagSet.DurationVar(&opts.MaxIdleTime, flagName("max-idletime"), defaults.MaxIdleTime, "maximum amount of time a connection can idle in a remote datastore's connection pool")
 	flagSet.DurationVar(&opts.HealthCheckInterval, flagName("healthcheck-interval"), defaults.HealthCheckInterval, "amount of time between connection health checks in a remote datastore's connection pool")
 }
@@ -107,7 +108,7 @@ type Config struct {
 	RevisionQuantization        time.Duration `debugmap:"visible"`
 	MaxRevisionStalenessPercent float64       `debugmap:"visible"`
 	CredentialsProviderName     string        `debugmap:"visible"`
-	FilterMaximumIDCount        uint16        `debugmap:"hidden" default:"100"`
+	FilterMaximumIDCount        uint16        `debugmap:"hidden"    default:"100"`
 
 	// Options
 	ReadConnPool                   ConnPoolConfig `debugmap:"visible"`
@@ -125,10 +126,11 @@ type Config struct {
 	ReadReplicaCredentialsProviderName string         `debugmap:"visible"`
 
 	// Bootstrap
-	BootstrapFiles        []string          `debugmap:"visible-format"`
-	BootstrapFileContents map[string][]byte `debugmap:"visible"`
-	BootstrapOverwrite    bool              `debugmap:"visible"`
-	BootstrapTimeout      time.Duration     `debugmap:"visible"`
+	BootstrapFiles        []string             `debugmap:"visible-format"`
+	BootstrapFileContents map[string][]byte    `debugmap:"visible"`
+	BootstrapOverwrite    bool                 `debugmap:"visible"`
+	BootstrapTimeout      time.Duration        `debugmap:"visible"`
+	CaveatTypeSet         *caveattypes.TypeSet `debugmap:"hidden"`
 
 	// Hedging
 	RequestHedgingEnabled          bool          `debugmap:"visible"`
@@ -145,8 +147,9 @@ type Config struct {
 	ConnectRate               time.Duration `debugmap:"visible"`
 
 	// Postgres
-	GCInterval         time.Duration `debugmap:"visible"`
-	GCMaxOperationTime time.Duration `debugmap:"visible"`
+	GCInterval            time.Duration `debugmap:"visible"`
+	GCMaxOperationTime    time.Duration `debugmap:"visible"`
+	RelaxedIsolationLevel bool          `debugmap:"visible"`
 
 	// Spanner
 	SpannerCredentialsFile        string `debugmap:"visible"`
@@ -168,6 +171,7 @@ type Config struct {
 	WatchBufferLength       uint16        `debugmap:"visible"`
 	WatchBufferWriteTimeout time.Duration `debugmap:"visible"`
 	WatchConnectTimeout     time.Duration `debugmap:"visible"`
+	DisableWatchSupport     bool          `debugmap:"hidden"`
 
 	// Migrations
 	MigrationPhase    string   `debugmap:"visible"`
@@ -275,6 +279,7 @@ func RegisterDatastoreFlagsWithPrefix(flagSet *pflag.FlagSet, prefix string, opt
 	flagSet.Uint16Var(&opts.WatchBufferLength, flagName("datastore-watch-buffer-length"), 1024, "how large the watch buffer should be before blocking")
 	flagSet.DurationVar(&opts.WatchBufferWriteTimeout, flagName("datastore-watch-buffer-write-timeout"), 1*time.Second, "how long the watch buffer should queue before forcefully disconnecting the reader")
 	flagSet.DurationVar(&opts.WatchConnectTimeout, flagName("datastore-watch-connect-timeout"), 1*time.Second, "how long the watch connection should wait before timing out (cockroachdb driver only)")
+	flagSet.BoolVar(&opts.DisableWatchSupport, flagName("datastore-disable-watch-support"), false, "disable watch support (only enable if you absolutely do not need watch)")
 	flagSet.BoolVar(&opts.IncludeQueryParametersInTraces, flagName("datastore-include-query-parameters-in-traces"), false, "include query parameters in traces (postgres and CRDB drivers only)")
 
 	flagSet.BoolVar(&opts.RelationshipIntegrityEnabled, flagName("datastore-relationship-integrity-enabled"), false, "enables relationship integrity checks. only supported on CRDB")
@@ -288,6 +293,11 @@ func RegisterDatastoreFlagsWithPrefix(flagSet *pflag.FlagSet, prefix string, opt
 		return fmt.Errorf("failed to mark flag as hidden: %w", err)
 	}
 
+	flagSet.BoolVar(&opts.RelaxedIsolationLevel, flagName("datastore-relaxed-isolation-level"), false, "used to relax the isolation level used in transactions (postgres driver only)")
+	if err := flagSet.MarkHidden(flagName("datastore-relaxed-isolation-level")); err != nil {
+		return fmt.Errorf("failed to mark flag as hidden: %w", err)
+	}
+
 	flagSet.DurationVar(&opts.LegacyFuzzing, flagName("datastore-revision-fuzzing-duration"), -1, "amount of time to advertize stale revisions")
 	if err := flagSet.MarkDeprecated(flagName("datastore-revision-fuzzing-duration"), "please use datastore-revision-quantization-interval instead"); err != nil {
 		return fmt.Errorf("failed to mark flag as deprecated: %w", err)
@@ -298,7 +308,7 @@ func RegisterDatastoreFlagsWithPrefix(flagSet *pflag.FlagSet, prefix string, opt
 		return fmt.Errorf("failed to mark flag as hidden: %w", err)
 	}
 
-	flagSet.BoolVar(&opts.ExperimentalColumnOptimization, flagName("datastore-experimental-column-optimization"), false, "enable experimental column optimization")
+	flagSet.BoolVar(&opts.ExperimentalColumnOptimization, flagName("datastore-experimental-column-optimization"), true, "enable experimental column optimization")
 
 	return nil
 }
@@ -326,6 +336,7 @@ func DefaultDatastoreConfig() *Config {
 		WatchBufferLength:                        1024,
 		WatchBufferWriteTimeout:                  1 * time.Second,
 		WatchConnectTimeout:                      1 * time.Second,
+		DisableWatchSupport:                      false,
 		EnableDatastoreMetrics:                   true,
 		DisableStats:                             false,
 		BootstrapFiles:                           []string{},
@@ -348,7 +359,7 @@ func DefaultDatastoreConfig() *Config {
 		RelationshipIntegrityCurrentKey:          RelIntegrityKey{},
 		RelationshipIntegrityExpiredKeys:         []string{},
 		AllowedMigrations:                        []string{},
-		ExperimentalColumnOptimization:           false,
+		ExperimentalColumnOptimization:           true,
 		IncludeQueryParametersInTraces:           false,
 		EnableExperimentalRelationshipExpiration: false,
 	}
@@ -410,14 +421,14 @@ func NewDatastore(ctx context.Context, options ...ConfigOption) (datastore.Datas
 		log.Ctx(ctx).Info().Strs("files", opts.BootstrapFiles).Msg("initializing datastore from bootstrap files")
 
 		if len(opts.BootstrapFiles) > 0 {
-			_, _, err = validationfile.PopulateFromFiles(ctx, ds, opts.BootstrapFiles)
+			_, _, err = validationfile.PopulateFromFiles(ctx, ds, opts.CaveatTypeSet, opts.BootstrapFiles)
 			if err != nil {
 				return nil, fmt.Errorf("failed to load bootstrap files: %w", err)
 			}
 		}
 
 		if len(opts.BootstrapFileContents) > 0 {
-			_, _, err = validationfile.PopulateFromFilesContents(ctx, ds, opts.BootstrapFileContents)
+			_, _, err = validationfile.PopulateFromFilesContents(ctx, ds, opts.CaveatTypeSet, opts.BootstrapFileContents)
 			if err != nil {
 				return nil, fmt.Errorf("failed to load bootstrap file contents: %w", err)
 			}
@@ -554,6 +565,7 @@ func newCRDBDatastore(ctx context.Context, opts Config) (datastore.Datastore, er
 		crdb.WithColumnOptimization(opts.ExperimentalColumnOptimization),
 		crdb.IncludeQueryParametersInTraces(opts.IncludeQueryParametersInTraces),
 		crdb.WithExpirationDisabled(!opts.EnableExperimentalRelationshipExpiration),
+		crdb.WithWatchDisabled(opts.DisableWatchSupport),
 	)
 }
 
@@ -644,9 +656,11 @@ func newPostgresPrimaryDatastore(ctx context.Context, opts Config) (datastore.Da
 		postgres.GCMaxOperationTime(opts.GCMaxOperationTime),
 		postgres.WatchBufferLength(opts.WatchBufferLength),
 		postgres.WatchBufferWriteTimeout(opts.WatchBufferWriteTimeout),
+		postgres.WithWatchDisabled(opts.DisableWatchSupport),
 		postgres.MigrationPhase(opts.MigrationPhase),
 		postgres.AllowedMigrations(opts.AllowedMigrations),
 		postgres.WithRevisionHeartbeat(opts.EnableRevisionHeartbeat),
+		postgres.WithRelaxedIsolationLevel(opts.RelaxedIsolationLevel),
 	}
 
 	commonOptions, err := commonPostgresDatastoreOptions(opts)
@@ -689,6 +703,7 @@ func newSpannerDatastore(ctx context.Context, opts Config) (datastore.Datastore,
 		spanner.FilterMaximumIDCount(opts.FilterMaximumIDCount),
 		spanner.WithColumnOptimization(opts.ExperimentalColumnOptimization),
 		spanner.WithExpirationDisabled(!opts.EnableExperimentalRelationshipExpiration),
+		spanner.WithWatchDisabled(opts.DisableWatchSupport),
 	)
 }
 
@@ -768,6 +783,7 @@ func newMySQLPrimaryDatastore(ctx context.Context, opts Config) (datastore.Datas
 		mysql.ConnMaxLifetime(opts.ReadConnPool.MaxLifetime),
 		mysql.WatchBufferLength(opts.WatchBufferLength),
 		mysql.WatchBufferWriteTimeout(opts.WatchBufferWriteTimeout),
+		mysql.WithWatchDisabled(opts.DisableWatchSupport),
 		mysql.CredentialsProviderName(opts.CredentialsProviderName),
 		mysql.FollowerReadDelay(opts.FollowerReadDelay),
 	}

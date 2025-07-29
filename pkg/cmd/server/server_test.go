@@ -7,25 +7,26 @@ import (
 	"testing"
 	"time"
 
-	"github.com/authzed/spicedb/internal/datastore/dsfortesting"
-	"github.com/authzed/spicedb/internal/logging"
-	"github.com/authzed/spicedb/pkg/cmd/datastore"
-	"github.com/authzed/spicedb/pkg/cmd/util"
-	"github.com/authzed/spicedb/pkg/testutil"
-
-	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.uber.org/goleak"
 	"google.golang.org/grpc"
+
+	v1 "github.com/authzed/authzed-go/proto/authzed/api/v1"
+
+	"github.com/authzed/spicedb/internal/datastore/dsfortesting"
+	"github.com/authzed/spicedb/internal/logging"
+	"github.com/authzed/spicedb/pkg/cmd/datastore"
+	"github.com/authzed/spicedb/pkg/cmd/util"
+	"github.com/authzed/spicedb/pkg/testutil"
 )
 
 func TestServerGracefulTermination(t *testing.T) {
 	defer goleak.VerifyNone(t, append(testutil.GoLeakIgnores(), goleak.IgnoreCurrent())...)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	ds, err := dsfortesting.NewMemDBDatastoreForTesting(0, 1*time.Second, 10*time.Second)
 	require.NoError(t, err)
 
@@ -62,7 +63,7 @@ func TestServerGracefulTermination(t *testing.T) {
 func TestOTelReporting(t *testing.T) {
 	defer goleak.VerifyNone(t, append(testutil.GoLeakIgnores(), goleak.IgnoreCurrent())...)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	ds, err := datastore.NewDatastore(ctx,
@@ -163,7 +164,7 @@ func setupSpanRecorder() (*tracetest.SpanRecorder, func()) {
 func TestServerGracefulTerminationOnError(t *testing.T) {
 	defer goleak.VerifyNone(t, append(testutil.GoLeakIgnores(), goleak.IgnoreCurrent())...)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	ds, err := dsfortesting.NewMemDBDatastoreForTesting(0, 1*time.Second, 10*time.Second)
 	require.NoError(t, err)
 
@@ -193,7 +194,7 @@ func TestReplaceUnaryMiddleware(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, unary, 1)
 
-	val, _ := unary[0](context.Background(), nil, nil, nil)
+	val, _ := unary[0](t.Context(), nil, nil, nil)
 	require.Equal(t, 1, val)
 }
 
@@ -213,7 +214,7 @@ func TestReplaceStreamingMiddleware(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, streaming, 1)
 
-	err = streaming[0](context.Background(), nil, nil, nil)
+	err = streaming[0](t.Context(), nil, nil, nil)
 	require.ErrorContains(t, err, "hi")
 }
 
@@ -241,7 +242,7 @@ func TestModifyUnaryMiddleware(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, unary, len(defaultMw.chain)+1)
 
-	val, _ := unary[1](context.Background(), nil, nil, nil)
+	val, _ := unary[1](t.Context(), nil, nil, nil)
 	require.Equal(t, 1, val)
 }
 
@@ -269,7 +270,7 @@ func TestModifyStreamingMiddleware(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, streaming, len(defaultMw.chain)+1)
 
-	err = streaming[1](context.Background(), nil, nil, nil)
+	err = streaming[1](t.Context(), nil, nil, nil)
 	require.ErrorContains(t, err, "hi")
 }
 

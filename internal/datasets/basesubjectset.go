@@ -1,7 +1,8 @@
 package datasets
 
 import (
-	"golang.org/x/exp/maps"
+	"maps"
+	"slices"
 
 	"github.com/authzed/spicedb/internal/caveats"
 	core "github.com/authzed/spicedb/pkg/proto/core/v1"
@@ -257,7 +258,7 @@ func (bss BaseSubjectSet[T]) IsEmpty() bool {
 
 // AsSlice returns the contents of the subject set as a slice of found subjects.
 func (bss BaseSubjectSet[T]) AsSlice() []T {
-	values := maps.Values(bss.concrete)
+	values := slices.Collect(maps.Values(bss.concrete))
 	if wildcard, ok := bss.wildcard.get(); ok {
 		values = append(values, wildcard)
 	}
@@ -379,7 +380,7 @@ func unionWildcardWithWildcard[T Subject[T]](existing *T, adding T, constructor 
 }
 
 // unionWildcardWithConcrete performs a union operation between a wildcard and a concrete subject
-// being added to the set, returning the updated wildcard (if applciable).
+// being added to the set, returning the updated wildcard (if applicable).
 func unionWildcardWithConcrete[T Subject[T]](existing *T, adding T, constructor constructor[T]) *T {
 	// If there is no existing wildcard, nothing more to do.
 	if existing == nil {

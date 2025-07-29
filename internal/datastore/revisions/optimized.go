@@ -62,7 +62,7 @@ func (cor *CachedOptimizedRevisions) OptimizedRevision(ctx context.Context) (dat
 	}
 	cor.RUnlock()
 
-	newQuantizedRevision, err, _ := cor.updateGroup.Do("", func() (interface{}, error) {
+	newQuantizedRevision, err, _ := cor.updateGroup.Do("", func() (any, error) {
 		log.Ctx(ctx).Debug().Time("now", localNow).Msg("computing new revision")
 		span.AddEvent("computing new revision")
 
@@ -105,9 +105,8 @@ type CachedOptimizedRevisions struct {
 	optimizedFunc        OptimizedRevisionFunction
 	clockFn              clock.Clock
 
-	// these values are read and set by multiple consumers, they're protected
-	// by a mutex
-	candidates []validRevision
+	// these values are read and set by multiple consumers
+	candidates []validRevision // GUARDED_BY(RWMutex)
 
 	// the updategroup consolidates concurrent requests to the database into 1
 	updateGroup singleflight.Group

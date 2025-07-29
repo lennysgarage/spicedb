@@ -8,7 +8,6 @@ import (
 	"math/rand/v2"
 	"os"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -60,6 +59,13 @@ const (
 	gcBatchDeleteSize = 1000
 
 	primaryInstanceID = -1
+
+	// The number of loop iterations where pg_current_xact_id is called per
+	// query to the database during a repair.
+	//
+	// This value is ideally dependent on the underlying hardware, but 1M seems
+	// to be a reasonable starting place.
+	repairBatchSize = 1_000_000
 )
 
 var livingTupleConstraints = []string{"uq_relation_tuple_living_xid", "pk_relation_tuple"}
@@ -71,11 +77,11 @@ func init() {
 var (
 	psql = sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 
-	getRevision = psql.
-			Select(schema.ColXID, schema.ColSnapshot).
-			From(schema.TableTransaction).
-			OrderByClause(fmt.Sprintf("%s DESC", schema.ColXID)).
-			Limit(1)
+	getRevisionForGC = psql.
+				Select(schema.ColXID, schema.ColSnapshot).
+				From(schema.TableTransaction).
+				OrderByClause(fmt.Sprintf("%s DESC", schema.ColXID)).
+				Limit(1)
 
 	createTxn = psql.Insert(schema.TableTransaction).Columns(schema.ColMetadata)
 
@@ -85,7 +91,7 @@ var (
 )
 
 type sqlFilter interface {
-	ToSql() (string, []interface{}, error)
+	ToSql() (string, []any, error)
 }
 
 // NewPostgresDatastore initializes a SpiceDB datastore that uses a PostgreSQL
@@ -127,7 +133,7 @@ func newPostgresDatastore(
 	pgURL string,
 	replicaIndex int,
 	options ...Option,
-) (datastore.Datastore, error) {
+) (datastore.StrictReadDatastore, error) {
 	isPrimary := replicaIndex == primaryInstanceID
 	config, err := generateConfig(options)
 	if err != nil {
@@ -135,14 +141,14 @@ func newPostgresDatastore(
 	}
 
 	// Parse the DB URI into configuration.
-	parsedConfig, err := pgxpool.ParseConfig(pgURL)
+	pgConfig, err := pgxpool.ParseConfig(pgURL)
 	if err != nil {
 		return nil, common.RedactAndLogSensitiveConnString(ctx, errUnableToInstantiate, err, pgURL)
 	}
 
 	// Setup the default custom plan setting, if applicable.
 	// Setup the default query execution mode setting, if applicable.
-	pgConfig := DefaultQueryExecMode(parsedConfig)
+	pgxcommon.ConfigureDefaultQueryExecMode(pgConfig.ConnConfig)
 
 	// Setup the credentials provider
 	var credentialsProvider datastore.CredentialsProvider
@@ -153,7 +159,7 @@ func newPostgresDatastore(
 		}
 	}
 
-	// Setup the config for each of the read and write pools.
+	// Setup the config for each of the read, write and GC pools.
 	readPoolConfig := pgConfig.Copy()
 	includeQueryParametersInTraces := config.includeQueryParametersInTraces
 	err = config.readPoolOpts.ConfigurePgx(readPoolConfig, includeQueryParametersInTraces)
@@ -208,7 +214,6 @@ func newPostgresDatastore(
 	}
 
 	var writePool *pgxpool.Pool
-
 	if isPrimary {
 		wp, err := pgxpool.NewWithConfig(initializationContext, writePoolConfig)
 		if err != nil {
@@ -225,9 +230,13 @@ func newPostgresDatastore(
 		return nil, err
 	}
 
-	watchEnabled := trackTSOn == "on"
+	watchEnabled := trackTSOn == "on" && !config.watchDisabled
 	if !watchEnabled {
-		log.Warn().Msg("watch API disabled, postgres must be run with track_commit_timestamp=on")
+		if config.watchDisabled {
+			log.Warn().Msg("watch API disabled via configuration")
+		} else {
+			log.Warn().Msg("watch API disabled, postgres must be run with track_commit_timestamp=on")
+		}
 	}
 
 	if config.enablePrometheusStats {
@@ -308,6 +317,11 @@ func newPostgresDatastore(
 	maxRevisionStaleness := time.Duration(float64(config.revisionQuantization.Nanoseconds())*
 		config.maxRevisionStalenessPercent) * time.Nanosecond
 
+	isolationLevel := pgx.Serializable
+	if config.relaxedIsolationLevel {
+		isolationLevel = pgx.RepeatableRead
+	}
+
 	datastore := &pgDatastore{
 		CachedOptimizedRevisions: revisions.NewCachedOptimizedRevisions(
 			maxRevisionStaleness,
@@ -336,6 +350,7 @@ func newPostgresDatastore(
 		filterMaximumIDCount:    config.filterMaximumIDCount,
 		schema:                  *schema.Schema(config.columnOptimizationOption, config.expirationDisabled),
 		quantizationPeriodNanos: quantizationPeriodNanos,
+		isolationLevel:          isolationLevel,
 	}
 
 	if isPrimary && config.readStrictMode {
@@ -406,6 +421,7 @@ type pgDatastore struct {
 	gcHasRun                atomic.Bool
 	filterMaximumIDCount    uint16
 	quantizationPeriodNanos int64
+	isolationLevel          pgx.TxIsoLevel
 }
 
 func (pgd *pgDatastore) MetricsID() (string, error) {
@@ -454,7 +470,7 @@ func (pgd *pgDatastore) ReadWriteTx(
 	for i := uint8(0); i <= pgd.maxRetries; i++ {
 		var newXID xid8
 		var newSnapshot pgSnapshot
-		err = wrapError(pgx.BeginTxFunc(ctx, pgd.writePool, pgx.TxOptions{IsoLevel: pgx.Serializable}, func(tx pgx.Tx) error {
+		err = wrapError(pgx.BeginTxFunc(ctx, pgd.writePool, pgx.TxOptions{IsoLevel: pgd.isolationLevel}, func(tx pgx.Tx) error {
 			var err error
 			var metadata map[string]any
 			if config.Metadata != nil && len(config.Metadata.GetFields()) > 0 {
@@ -466,7 +482,7 @@ func (pgd *pgDatastore) ReadWriteTx(
 				return err
 			}
 
-			queryFuncs := pgxcommon.QuerierFuncsFor(pgd.readPool)
+			queryFuncs := pgxcommon.QuerierFuncsFor(tx)
 			executor := common.QueryRelationshipsExecutor{
 				Executor: pgxcommon.NewPGXQueryRelationshipsExecutor(queryFuncs, pgd),
 			}
@@ -520,8 +536,6 @@ func (pgd *pgDatastore) Repair(ctx context.Context, operationName string, output
 	}
 }
 
-const batchSize = 10000
-
 func (pgd *pgDatastore) repairTransactionIDs(ctx context.Context, outputProgress bool) error {
 	conn, err := pgx.Connect(ctx, pgd.dburl)
 	if err != nil {
@@ -558,17 +572,8 @@ func (pgd *pgDatastore) repairTransactionIDs(ctx context.Context, outputProgress
 	}
 
 	for i := 0; i < counterDelta; i++ {
-		var batch pgx.Batch
-
-		batchCount := min(batchSize, counterDelta-i)
-		for j := 0; j < batchCount; j++ {
-			batch.Queue("begin;")
-			batch.Queue("select pg_current_xact_id();")
-			batch.Queue("rollback;")
-		}
-
-		br := conn.SendBatch(ctx, &batch)
-		if err := br.Close(); err != nil {
+		batchCount := min(repairBatchSize, counterDelta-i)
+		if _, err := conn.Exec(ctx, queryLoopXactID(batchCount)); err != nil {
 			return err
 		}
 
@@ -588,6 +593,17 @@ func (pgd *pgDatastore) repairTransactionIDs(ctx context.Context, outputProgress
 
 	log.Ctx(ctx).Info().Msg("completed revisions repair")
 	return nil
+}
+
+// queryLoopXactID performs pg_current_xact_id() in a server-side loop in the
+// database in order to increment the xact_id.
+func queryLoopXactID(batchSize int) string {
+	return fmt.Sprintf(`DO $$
+BEGIN
+  FOR i IN 1..%d LOOP
+    PERFORM pg_current_xact_id(); ROLLBACK;
+  END LOOP;
+END $$;`, batchSize)
 }
 
 // RepairOperations returns the available repair operations for the datastore.
@@ -634,7 +650,9 @@ func (pgd *pgDatastore) Close() error {
 
 	if pgd.workerGroup != nil {
 		err := pgd.workerGroup.Wait()
-		log.Warn().Err(err).Msg("completed shutdown of postgres datastore")
+		if err != nil && !errors.Is(err, context.Canceled) {
+			log.Warn().Err(err).Msg("completed shutdown of postgres datastore")
+		}
 	}
 
 	pgd.readPool.Close()
@@ -735,13 +753,19 @@ func (pgd *pgDatastore) startRevisionHeartbeat(ctx context.Context) error {
 	log.Info().Stringer("interval", heartbeatDuration).Msg("starting revision heartbeat")
 	tick := time.NewTicker(heartbeatDuration)
 
+	conn, err := pgd.writePool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+
 	// Leader election. Continue trying to acquire in case the current leader died.
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 
-		ok, err := pgd.tryAcquireLock(ctx, revisionHeartbeatLock)
+		ok, err := pgd.tryAcquireLock(ctx, conn, revisionHeartbeatLock)
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to acquire revision heartbeat lock")
 		}
@@ -755,7 +779,7 @@ func (pgd *pgDatastore) startRevisionHeartbeat(ctx context.Context) error {
 	}
 
 	defer func() {
-		if err := pgd.releaseLock(ctx, revisionHeartbeatLock); err != nil {
+		if err := pgd.releaseLock(ctx, conn, revisionHeartbeatLock); err != nil && !errors.Is(err, context.Canceled) {
 			log.Warn().Err(err).Msg("failed to release revision heartbeat lock")
 		}
 	}()
@@ -793,27 +817,6 @@ func buildLivingObjectFilterForRevision(revision postgresRevision) queryFilterer
 
 func currentlyLivingObjects(original sq.SelectBuilder) sq.SelectBuilder {
 	return original.Where(sq.Eq{schema.ColDeletedXid: liveDeletedTxnID})
-}
-
-// DefaultQueryExecMode parses a Postgres URI and determines if a default_query_exec_mode
-// has been specified. If not, it defaults to "exec".
-// SpiceDB queries have high variability of arguments and rarely benefit from using prepared statements.
-// The default and recommended query exec mode is 'exec', which has shown the best performance under various
-// synthetic workloads. See more in https://spicedb.dev/d/query-exec-mode.
-//
-// The docs for the different execution modes offered by pgx may be found
-// here: https://pkg.go.dev/github.com/jackc/pgx/v5#QueryExecMode
-func DefaultQueryExecMode(poolConfig *pgxpool.Config) *pgxpool.Config {
-	if !strings.Contains(poolConfig.ConnString(), "default_query_exec_mode") {
-		// the execution mode was not overridden by the user
-		poolConfig.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeExec
-		return poolConfig
-	}
-
-	log.Info().
-		Str("details-url", "https://spicedb.dev/d/query-exec-mode").
-		Msg("found default_query_exec_mode in DB URI; leaving as-is")
-	return poolConfig
 }
 
 var _ datastore.Datastore = &pgDatastore{}
